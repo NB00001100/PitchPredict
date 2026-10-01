@@ -38,7 +38,7 @@ import fit_predict
 import ingest_matches
 from db import DEFAULT_DAYS, get_client, load_all_fixtures, load_matches, load_view, select_upcoming
 from seasons import CURRENT_SEASON
-from teams import check_team_names
+from teams import check_team_names, to_model_name
 
 WARNINGS = []  # collected for the final summary
 
@@ -97,12 +97,14 @@ def staleness(sb):
     print(f"FINISHED fixtures in current_fixtures ({CURRENT_SEASON}): {len(finished)}")
     print(f"{CURRENT_SEASON} rows in matches (training data):     {len(cur)}  (latest {latest})")
     if gap > 0:
-        newer = finished[finished["kickoff"] > cur["date"].max()] if len(cur) else finished
         warn(f"matches is {gap} result(s) behind current_fixtures (football-data.co.uk not updated yet). "
              f"Forecasts this run are fitted without them; they will be included once the CSV catches up.")
-        for f in newer.itertuples(index=False):
-            print(f"    not yet in matches? MW{f.matchweek} {f.kickoff:%Y-%m-%d %H:%M} "
-                  f"{f.home_team} {f.home_goals}-{f.away_goals} {f.away_team}")
+        # Each home/away pairing occurs once per season, so it identifies the match.
+        have = set(zip(cur["home_team"], cur["away_team"]))
+        for f in finished.itertuples(index=False):
+            if (to_model_name(f.home_team), to_model_name(f.away_team)) not in have:
+                print(f"    not yet in matches: MW{f.matchweek} {f.kickoff:%Y-%m-%d %H:%M} "
+                      f"{f.home_team} {f.home_goals}-{f.away_goals} {f.away_team}")
     elif gap < 0:
         warn(f"matches has {-gap} more {CURRENT_SEASON} result(s) than current_fixtures has FINISHED "
              "fixtures; one of the sources looks wrong, worth a manual look.")

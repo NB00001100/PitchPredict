@@ -1,0 +1,5 @@
+# Development-only extras on top of requirements.txt (not installed in CI).
+# penaltyblog is used only by test_vs_penaltyblog.py as a correctness cross-check;
+# it pulls in ~80 packages (matplotlib, plotly, Cython, ...), about 0.5 GB.
+-r requirements.txt
+penaltyblog

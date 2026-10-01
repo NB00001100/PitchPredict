@@ -1,7 +1,9 @@
-penaltyblog
-pandas
-numpy
-scipy
-supabase
-requests
-python-dotenv
+# Runtime dependencies (what refresh.py and the model need; installed in CI).
+# Pinned to versions tested together so the scheduled job does not break on an
+# upstream release; bump deliberately. Dev-only extras: requirements-dev.txt.
+pandas==3.0.6
+numpy==2.5.3
+scipy==1.18.1
+supabase==2.31.0
+requests==2.34.2
+python-dotenv==1.2.4

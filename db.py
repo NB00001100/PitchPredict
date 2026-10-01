@@ -84,6 +84,7 @@ def load_all_fixtures(sb=None, season=None):
                       eq={"season": season} if season else None)
     df = pd.DataFrame(rows, columns=cols.split(","))
     df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True, format="ISO8601")
+    df[["home_goals", "away_goals"]] = df[["home_goals", "away_goals"]].astype("Int64")  # null until FINISHED
     return df.sort_values(["kickoff", "id"]).reset_index(drop=True)
 
 

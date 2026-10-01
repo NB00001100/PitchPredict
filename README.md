@@ -162,7 +162,9 @@ place by lowering out-of-sample RPS in this harness.
   predictions for the upcoming matchweek.
 - **Stubbed:** a stacking layer for extra covariates (interface only, in
   `optimize.py`).
-- **Planned:** API endpoint, frontend, scheduled refresh.
+- **Scheduled refresh:** `refresh.py` runs every Tuesday and Friday via GitHub Actions;
+  see [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+- **Planned:** API endpoint, frontend.
 
 ## Setup
 
@@ -170,7 +172,8 @@ Developed on Python 3.13; requires a Supabase project.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt       # runtime (what CI installs)
+.venv/bin/pip install -r requirements-dev.txt   # + penaltyblog, for test_vs_penaltyblog.py only
 cp .env.example .env    # then fill in the three values
 ```
 
@@ -195,8 +198,11 @@ SQL editor, then:
 .venv/bin/python optimize.py            # grid search; writes model_config.json (~2.5 min)
 .venv/bin/python season_holdout.py      # previous seasons -> this season
 
-# 3. Predict the upcoming matchweek
-.venv/bin/python fit_predict.py         # --dry-run to print without storing
+# 3. Predict fixtures kicking off in the next 8 days
+.venv/bin/python fit_predict.py         # --dry-run to print without storing, --days N
+
+# Or all of the above data + forecast steps at once (what the scheduled job runs)
+.venv/bin/python refresh.py             # --dry-run supported
 
 # Model self-checks
 .venv/bin/python dixon_coles.py
@@ -212,7 +218,10 @@ SQL editor, then:
 | `shrinkage.py` | Promoted-team prior and the two-stage fit |
 | `backtest.py` | Walk-forward harness, metrics, baselines, report |
 | `optimize.py` | Hyperparameter grid search; stacking stub |
+| `refresh.py` | The weekly update end to end (see `docs/OPERATIONS.md`) |
 | `fit_predict.py` | Production fit and stored predictions |
+| `backfill_predictions.py` | After-the-fact forecasts for finished fixtures that lack a real one |
+| `seasons.py`, `teams.py` | Current season from the date; fixture -> model team names and their check |
 | `season_holdout.py` | Previous-seasons-only test for one season |
 | `ingest_matches.py`, `fetch_fixtures.py` | Data ingestion |
 | `db.py` | Supabase loaders |
