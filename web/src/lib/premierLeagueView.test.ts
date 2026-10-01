@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { expectedRange } from './benchmarks'
-import { meterDomain, meterPosition, meterTicks } from './meterScale'
+import { meterDomain, meterPosition, meterTicks, niceDomain } from './meterScale'
 import { toFixture, type Fixture } from './types'
 import { actualOutcome, describeCounts, pickOf, weekBreakdown } from './weekBreakdown'
 
@@ -100,5 +100,13 @@ describe('meterPosition and meterTicks', () => {
   it('ticks every ten, ends included', () => {
     expect(meterTicks([30, 70])).toEqual([30, 40, 50, 60, 70])
     expect(meterTicks([20, 90])).toEqual([20, 30, 40, 50, 60, 70, 80, 90])
+  })
+})
+
+describe('niceDomain', () => {
+  it('keeps the floor range and snaps outwards to the step', () => {
+    expect(niceDomain([0.1987], 0.02, [0.18, 0.24])).toEqual([0.18, 0.24])
+    expect(niceDomain([0.31], 0.02, [0.18, 0.24], 0.005)).toEqual([0.18, 0.32])
+    expect(niceDomain([0.15], 0.02, [0.18, 0.24])).toEqual([0.14, 0.24])
   })
 })

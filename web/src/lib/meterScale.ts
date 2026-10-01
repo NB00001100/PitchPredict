@@ -26,3 +26,17 @@ export function meterTicks([lo, hi]: readonly [number, number], step = 10): numb
   for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) ticks.push(t)
   return ticks
 }
+
+/**
+ * A domain covering every value plus `pad`, snapped outwards to multiples of
+ * `step`, and never narrower than `[min, max]`. For position scales such as
+ * the RPS strip, where the subset on screen can sit anywhere.
+ */
+export function niceDomain(values: readonly number[], step: number, [min, max]: readonly [number, number], pad = 0): [number, number] {
+  const lo = Math.min(min, ...values.map((v) => v - pad))
+  const hi = Math.max(max, ...values.map((v) => v + pad))
+  // The epsilon keeps floating-point noise (0.18 / 0.02 = 8.999…) from pushing an edge out a step.
+  const down = Math.floor(lo / step + 1e-9) * step
+  const up = Math.ceil(hi / step - 1e-9) * step
+  return [Number(down.toFixed(6)), Number(up.toFixed(6))]
+}

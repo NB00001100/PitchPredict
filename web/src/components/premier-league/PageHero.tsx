@@ -1,4 +1,4 @@
-import { motion } from 'motion/react'
+import * as m from 'motion/react-m'
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router'
 import { EASE_OUT_EXPO } from '../../lib/motion'
@@ -54,20 +54,20 @@ export function PageHero({ eyebrow = 'Forecasts · 2026/27 season', lede = DEFAU
         className="pointer-events-none absolute -top-24 right-0 -z-10 h-[28rem] w-[40rem] max-w-full rounded-full bg-[radial-gradient(closest-side,rgb(150_200_255/0.08),transparent)]"
       />
 
-      <motion.p {...rise(0)} className="type-eyebrow flex items-center gap-3 text-grey-200">
+      <m.p {...rise(0)} className="type-eyebrow flex items-center gap-3 text-grey-200">
         <span aria-hidden="true" className="h-px w-10 bg-pitch" />
         {eyebrow}
-      </motion.p>
-      <motion.h1 {...rise(0.08)} className="type-display mt-6">
+      </m.p>
+      <m.h1 {...rise(0.08)} className="type-display mt-6">
         Premier <span className="text-glow">League</span>
-      </motion.h1>
-      <motion.p {...rise(0.2)} className="type-lede mt-6 max-w-[40rem]">
+      </m.h1>
+      <m.p {...rise(0.2)} className="type-lede mt-6 max-w-[40rem]">
         {lede}
-      </motion.p>
-      <motion.div {...rise(0.3)} className="mt-9 flex flex-wrap items-center gap-x-6 gap-y-3">
+      </m.p>
+      <m.div {...rise(0.3)} className="mt-9 flex flex-wrap items-center gap-x-6 gap-y-3">
         <ViewTabs />
-        {status ? <div className="font-mono text-[0.7rem] tracking-[0.04em] text-grey-400">{status}</div> : null}
-      </motion.div>
+        {status ? <div className="w-full font-mono text-[0.7rem] tracking-[0.04em] text-grey-400 sm:w-auto">{status}</div> : null}
+      </m.div>
     </header>
   )
 }

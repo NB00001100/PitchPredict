@@ -1,4 +1,4 @@
-import { motion } from 'motion/react'
+import * as m from 'motion/react-m'
 import { BACKTEST_MATCHES, BENCHMARKS, expectedRange, formatPct, type Benchmark } from '../../lib/benchmarks'
 import { meterDomain, meterPosition } from '../../lib/meterScale'
 import { EASE_OUT_EXPO } from '../../lib/motion'
@@ -61,7 +61,7 @@ export function HitRateMeter({ pct, graded }: HitRateMeterProps) {
         {/* Rail, with the expected range lit along it and minor ticks every 5 points. */}
         <div className="absolute inset-x-0 rounded-full bg-grey-800 shadow-[inset_0_1px_2px_rgb(0_0_0/0.6)]" style={{ top: RAIL_TOP, height: RAIL_H }}>
           {range ? (
-            <motion.div
+            <m.div
               className="absolute inset-y-0 rounded-full bg-[linear-gradient(90deg,rgb(214_255_234/0.08),rgb(214_255_234/0.2),rgb(214_255_234/0.08))] shadow-[inset_0_0_0_1px_rgb(214_255_234/0.22)]"
               style={{ left: `${at(range[0])}%`, width: `${at(range[1]) - at(range[0])}%`, originX: 0.5 }}
               initial={reduced ? false : { opacity: 0, scaleX: 0.2 }}
@@ -81,22 +81,22 @@ export function HitRateMeter({ pct, graded }: HitRateMeterProps) {
 
         {/* Reference ticks crossing the rail, leaders down to their labels. */}
         {BENCHMARKS.map((b) => {
-          const m = MARKS[b.id]
+          const mark = MARKS[b.id]
           const x = at(b.pct)
-          const top = LANE_TOP[m.lane]
+          const top = LANE_TOP[mark.lane]
           return (
             <div key={b.id}>
               <span
-                className={`absolute w-0.5 -translate-x-1/2 rounded-full ${m.strong ? 'bg-white' : 'bg-grey-400'}`}
+                className={`absolute w-0.5 -translate-x-1/2 rounded-full ${mark.strong ? 'bg-white' : 'bg-grey-400'}`}
                 style={{ left: `${x}%`, top: RAIL_TOP - 6, height: RAIL_H + 12 }}
               />
               <span
-                className={`absolute w-px -translate-x-1/2 ${m.strong ? 'bg-white/45' : 'bg-grey-400/40'}`}
+                className={`absolute w-px -translate-x-1/2 ${mark.strong ? 'bg-white/45' : 'bg-grey-400/40'}`}
                 style={{ left: `${x}%`, top: RAIL_TOP + RAIL_H + 6, height: top - (RAIL_TOP + RAIL_H + 6) - 2 }}
               />
-              <span className={`absolute flex flex-col gap-0.5 whitespace-nowrap ${ANCHOR[m.anchor]}`} style={{ left: `${x}%`, top }}>
-                <span className={`text-[0.74rem] leading-tight ${m.strong ? 'font-medium text-white' : 'text-grey-200'}`}>{b.label}</span>
-                <span className={`font-mono text-[0.74rem] leading-tight tabular-nums ${m.strong ? 'text-white' : 'text-grey-400'}`}>{formatPct(b.pct)}</span>
+              <span className={`absolute flex flex-col gap-0.5 whitespace-nowrap ${ANCHOR[mark.anchor]}`} style={{ left: `${x}%`, top }}>
+                <span className={`text-[0.74rem] leading-tight ${mark.strong ? 'font-medium text-white' : 'text-grey-200'}`}>{b.label}</span>
+                <span className={`font-mono text-[0.74rem] leading-tight tabular-nums ${mark.strong ? 'text-white' : 'text-grey-400'}`}>{formatPct(b.pct)}</span>
               </span>
             </div>
           )
@@ -122,7 +122,7 @@ export function HitRateMeter({ pct, graded }: HitRateMeterProps) {
 
         {/* The needle: this season. Slides in from the low end of the scale. */}
         {needle !== null ? (
-          <motion.div
+          <m.div
             className="absolute inset-x-0 top-0"
             initial={reduced ? false : { x: '0%', opacity: 0 }}
             whileInView={{ x: `${needle}%`, opacity: 1 }}
@@ -136,7 +136,7 @@ export function HitRateMeter({ pct, graded }: HitRateMeterProps) {
             </span>
             <span className="absolute w-[3px] -translate-x-1/2 rounded-full bg-pitch shadow-[0_0_12px_rgb(60_240_140/0.9)]" style={{ top: 24, height: RAIL_TOP - 24 + RAIL_H + 8 }} />
             <span className="absolute size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-black bg-pitch-bright shadow-[0_0_14px_rgb(60_240_140/0.9)]" style={{ top: RAIL_TOP + RAIL_H / 2 }} />
-          </motion.div>
+          </m.div>
         ) : null}
       </div>
 

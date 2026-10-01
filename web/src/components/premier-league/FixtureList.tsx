@@ -1,4 +1,4 @@
-import { motion } from 'motion/react'
+import * as m from 'motion/react-m'
 import { formatDayHeading, groupByKickoffDay } from '../../lib/dates'
 import { EASE_OUT_EXPO } from '../../lib/motion'
 import type { Fixture } from '../../lib/types'
@@ -36,14 +36,14 @@ export function FixtureList({ fixtures }: { fixtures: readonly Fixture[] }) {
             {day.fixtures.map((f) => {
               const delay = Math.min(index++ * STEP, MAX_DELAY)
               return (
-                <motion.li
+                <m.li
                   key={f.fixture_id}
                   initial={reduced ? false : { opacity: 0, y: 14 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.5, ease: EASE_OUT_EXPO, delay }}
                 >
                   <FixtureCard fixture={f} delay={Math.round(delay * 1000) + 120} />
-                </motion.li>
+                </m.li>
               )
             })}
           </ul>

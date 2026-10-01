@@ -35,6 +35,7 @@ export function SeasonPanel({ season }: { season: SeasonSummary }) {
   const verdict = seasonVerdict(rate.pct, rate.total)
   const range = expectedRange(rate.total)
   const misses = rate.total - rate.hits
+  const seasonMatches = weeks.reduce((n, w) => n + w.fixtures.length, 0)
 
   return (
     <section aria-labelledby="season-heading" className="mt-12 md:mt-16">
@@ -63,7 +64,7 @@ export function SeasonPanel({ season }: { season: SeasonSummary }) {
               <span className="font-mono text-white tabular-nums">{misses}</span> misses so far)
             </>
           ) : null}
-          .{range && rate.total < 380 ? ' Small samples swing a lot, so read the needle against the bracket.' : ''}{' '}
+          .{range && rate.total < seasonMatches ? ' Small samples swing a lot, so read the needle against the bracket.' : ''}{' '}
           <TextLink to="/about" className="inline-flex items-center gap-1 whitespace-nowrap text-white">
             How it works
             <ArrowRightIcon className="size-3.5" />

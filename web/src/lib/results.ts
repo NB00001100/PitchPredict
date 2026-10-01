@@ -9,6 +9,11 @@ import { actualOutcome } from './weekBreakdown'
  * on screen.
  */
 
+/** The call, labelled from the home side's point of view. */
+export const CALL_WORD: Record<Outcome, string> = { H: 'Home', D: 'Draw', A: 'Away' }
+/** What happened, in words. */
+export const RESULT_WORD: Record<Outcome, string> = { H: 'Home win', D: 'Draw', A: 'Away win' }
+
 /**
  * The model's call: the most likely outcome. Ties go home, then away, then
  * draw, matching the `pick` column the database computes.

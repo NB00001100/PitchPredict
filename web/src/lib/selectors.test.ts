@@ -38,19 +38,65 @@ describe('byMatchweek', () => {
 })
 
 describe('currentMatchweek', () => {
-  it('is the lowest matchweek with an unfinished fixture', () => {
+  const at = (iso: string) => Date.parse(iso)
+  /** A full round of `n` fixtures from `start`, one every 2.5 hours. */
+  function round(matchweek: number, start: string, status: Fixture['status'] = 'TIMED', n = 10): Fixture[] {
+    return Array.from({ length: n }, (_, i) =>
+      fx({ matchweek, status, kickoff: new Date(at(start) + i * 2.5 * 3600_000).toISOString() }),
+    )
+  }
+
+  it('normal week: the next full round', () => {
     const fixtures = [
-      fx({ matchweek: 5, status: 'FINISHED' }),
-      fx({ matchweek: 5, status: 'CANCELLED' }),
-      fx({ matchweek: 6, status: 'FINISHED' }),
-      fx({ matchweek: 6, status: 'POSTPONED' }),
-      fx({ matchweek: 7, status: 'TIMED' }),
+      ...round(5, '2026-10-03T11:30:00Z', 'FINISHED'),
+      ...round(6, '2026-10-10T11:30:00Z'),
+      ...round(7, '2026-10-17T11:30:00Z'),
     ]
-    expect(currentMatchweek(fixtures)).toBe(6)
+    expect(currentMatchweek(fixtures, at('2026-10-07T12:00:00Z'))).toBe(6)
   })
 
-  it('falls back to the last matchweek when all are done, and null when empty', () => {
+  it('ignores a leftover postponed fixture from an earlier matchweek', () => {
+    const fixtures = [
+      ...round(4, '2026-09-26T11:30:00Z', 'FINISHED', 9),
+      fx({ matchweek: 4, status: 'POSTPONED', kickoff: '2026-09-27T15:00:00Z' }),
+      ...round(5, '2026-10-03T11:30:00Z', 'FINISHED'),
+      ...round(6, '2026-10-10T11:30:00Z'),
+    ]
+    expect(currentMatchweek(fixtures, at('2026-10-07T12:00:00Z'))).toBe(6)
+  })
+
+  it('a rescheduled midweek game from an old matchweek does not outvote the next full round', () => {
+    const fixtures = [
+      ...round(3, '2026-09-19T11:30:00Z', 'FINISHED', 9),
+      fx({ matchweek: 3, status: 'TIMED', kickoff: '2026-10-07T19:00:00Z' }),
+      ...round(5, '2026-10-03T11:30:00Z', 'FINISHED'),
+      ...round(6, '2026-10-10T11:30:00Z'),
+    ]
+    expect(currentMatchweek(fixtures, at('2026-10-06T12:00:00Z'))).toBe(6)
+  })
+
+  it('prefers a matchweek in progress', () => {
+    const fixtures = [...round(6, '2026-10-10T11:30:00Z', 'FINISHED', 6), ...round(6, '2026-10-12T19:00:00Z', 'TIMED', 4), ...round(7, '2026-10-17T11:30:00Z')]
+    expect(currentMatchweek(fixtures, at('2026-10-11T22:00:00Z'))).toBe(6)
+  })
+
+  it('a finished round with one game moved weeks ahead is not "in progress"', () => {
+    const fixtures = [
+      ...round(5, '2026-10-03T11:30:00Z', 'FINISHED', 9),
+      fx({ matchweek: 5, status: 'TIMED', kickoff: '2026-12-02T19:45:00Z' }),
+      ...round(6, '2026-10-10T11:30:00Z'),
+    ]
+    expect(currentMatchweek(fixtures, at('2026-10-05T23:00:00Z'))).toBe(6)
+  })
+
+  it('ignores stale scheduled fixtures left in the past', () => {
+    const fixtures = [fx({ matchweek: 2, status: 'TIMED', kickoff: '2026-08-29T14:00:00Z' }), ...round(6, '2026-10-10T11:30:00Z')]
+    expect(currentMatchweek(fixtures, at('2026-10-07T12:00:00Z'))).toBe(6)
+  })
+
+  it('season finished: the last matchweek; null when empty', () => {
     expect(currentMatchweek([fx({ matchweek: 38, status: 'FINISHED' }), fx({ matchweek: 37, status: 'FINISHED' })])).toBe(38)
+    expect(currentMatchweek([...round(38, '2027-05-23T15:00:00Z', 'FINISHED'), fx({ matchweek: 30, status: 'POSTPONED' })], at('2027-06-01T00:00:00Z'))).toBe(38)
     expect(currentMatchweek([])).toBeNull()
   })
 })

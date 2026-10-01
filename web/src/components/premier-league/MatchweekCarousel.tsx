@@ -142,13 +142,17 @@ interface ArrowButtonProps {
 }
 
 function ArrowButton({ label, disabled, onClick, children }: ArrowButtonProps) {
+  // aria-disabled rather than disabled: a focused button that hits the end of
+  // the season keeps focus, so arrow keys keep working inside the carousel.
   return (
     <button
       type="button"
       aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl border border-hairline-strong bg-glass text-white transition-[background-color,border-color,color,scale] duration-200 hover:border-pitch/60 hover:bg-pitch-dim hover:text-pitch active:scale-90 disabled:pointer-events-none disabled:opacity-30"
+      aria-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onClick}
+      className={`inline-flex size-11 shrink-0 items-center justify-center rounded-xl border border-hairline-strong bg-glass text-white transition-[background-color,border-color,color,scale,opacity] duration-200 ${
+        disabled ? 'cursor-default opacity-30' : 'hover:border-pitch/60 hover:bg-pitch-dim hover:text-pitch active:scale-90'
+      }`}
     >
       {children}
     </button>

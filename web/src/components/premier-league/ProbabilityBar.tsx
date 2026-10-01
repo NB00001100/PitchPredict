@@ -5,7 +5,7 @@ import type { Fixture, Outcome } from '../../lib/types'
 
 interface ProbabilityBarProps {
   fixture: Pick<Fixture, 'home_team' | 'away_team' | 'home_tla' | 'away_tla'>
-  forecast: ForecastView
+  forecast: Pick<ForecastView, 'shares' | 'percents' | 'pick'>
   /** Entrance delay in ms, so the bar fills just after its card lands. */
   delay?: number
 }
@@ -37,7 +37,7 @@ export function ProbabilityBar({ fixture, forecast, delay = 0 }: ProbabilityBarP
           return (
             <span
               key={s.outcome}
-              className={`min-w-1 rounded-[2px] first:rounded-l-full last:rounded-r-full ${FILL[s.outcome]} ${picked ? 'h-3' : 'h-1.5 opacity-55'}`}
+              className={`min-w-1.5 rounded-[2px] first:rounded-l-full last:rounded-r-full ${FILL[s.outcome]} ${picked ? 'h-3' : 'h-1.5 opacity-55'}`}
               style={{ width: `${s.width}%` }}
             />
           )

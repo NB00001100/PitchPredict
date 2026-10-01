@@ -29,7 +29,7 @@ export function FixtureCard({ fixture, delay = 0 }: { fixture: Fixture; delay?: 
       className="grid h-full gap-2 p-2 transition-[border-color] duration-300 hover:border-hairline-strong sm:p-2.5 lg:grid-cols-[minmax(0,13.5rem)_minmax(0,1fr)_minmax(0,13rem)_minmax(0,10.5rem)] lg:gap-2.5"
     >
       <PointerLight size={520} color="rgb(150 200 255 / 0.09)" />
-      <Teams view={view} />
+      <Teams fixture={view.fixture} />
       <Predicted view={view} delay={delay} />
       <Actual view={view} />
       <Verdict view={view} />
@@ -39,8 +39,7 @@ export function FixtureCard({ fixture, delay = 0 }: { fixture: Fixture; delay?: 
 
 /* ---------- Teams ---------- */
 
-function Teams({ view }: { view: FixtureView }) {
-  const { fixture } = view
+export function Teams({ fixture }: { fixture: Fixture }) {
   return (
     <h4 className="flex flex-col justify-center gap-2 px-2 pt-2 pb-1 lg:py-2">
       <TeamRow tla={fixture.home_tla} name={fixture.home_team} side="Home" />
@@ -174,7 +173,7 @@ function ActualStatus({ view }: { view: FixtureView }) {
   )
 }
 
-function Score({ fixture, score, dim }: { fixture: Fixture; score: [number, number]; dim: boolean }) {
+export function Score({ fixture, score, dim = false }: { fixture: Fixture; score: [number, number]; dim?: boolean }) {
   return (
     <p className="flex items-center gap-3">
       <span className="sr-only">{`${fixture.home_team} ${score[0]}, ${fixture.away_team} ${score[1]}`}</span>
@@ -260,7 +259,7 @@ const VERDICT_TONE = {
   pending: 'border-hairline bg-black/20',
 } as const
 
-function VerdictShell({ tone, children }: { tone: keyof typeof VERDICT_TONE; children: ReactNode }) {
+export function VerdictShell({ tone, children }: { tone: keyof typeof VERDICT_TONE; children: ReactNode }) {
   return (
     <p
       className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border px-3.5 py-3 lg:flex-col lg:flex-nowrap lg:items-start lg:justify-center ${VERDICT_TONE[tone]}`}

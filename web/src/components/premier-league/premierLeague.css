@@ -95,39 +95,61 @@
 /* ---------- Directional matchweek change (React <ViewTransition> classes) ---------- */
 
 /*
- * Next week arrives from the right, previous from the left: a short travel
- * with a quick fade, old content leaving faster than new content arrives so
- * the two never compete. Browsers without view transitions swap instantly.
+ * Next week arrives from the right, previous from the left. Browsers
+ * without view transitions swap instantly; under reduced motion nothing moves.
  */
-@keyframes mw-in {
+@keyframes mw-move-in {
   from {
     transform: translateX(var(--mw-offset));
-    opacity: 0;
   }
 }
 
-@keyframes mw-out {
+@keyframes mw-move-out {
   to {
     transform: translateX(var(--mw-offset));
+  }
+}
+
+@keyframes mw-fade-in {
+  from {
     opacity: 0;
   }
 }
 
+@keyframes mw-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/*
+ * Travel and fade run separately. The outgoing week is gone in about 110ms;
+ * the incoming one starts fading in at 70ms, so the two barely overlap (no
+ * ghosted double text) and there is no empty gap either.
+ */
+::view-transition-new(.mw-from-right),
+::view-transition-new(.mw-from-left) {
+  animation:
+    mw-move-in 420ms var(--ease-out-expo) both,
+    mw-fade-in 220ms ease-out 70ms both;
+}
 ::view-transition-new(.mw-from-right) {
-  --mw-offset: 56px;
-  animation: mw-in 340ms var(--ease-out-expo) both;
+  --mw-offset: 48px;
 }
 ::view-transition-new(.mw-from-left) {
-  --mw-offset: -56px;
-  animation: mw-in 340ms var(--ease-out-expo) both;
+  --mw-offset: -48px;
+}
+::view-transition-old(.mw-to-left),
+::view-transition-old(.mw-to-right) {
+  animation:
+    mw-move-out 160ms var(--ease-in-out-quart) both,
+    mw-fade-out 110ms ease-in both;
 }
 ::view-transition-old(.mw-to-left) {
-  --mw-offset: -40px;
-  animation: mw-out 150ms var(--ease-in-out-quart) both;
+  --mw-offset: -32px;
 }
 ::view-transition-old(.mw-to-right) {
-  --mw-offset: 40px;
-  animation: mw-out 150ms var(--ease-in-out-quart) both;
+  --mw-offset: 32px;
 }
 
 /* The two snapshots of a sliding block may differ in height: don't morph the box. */
@@ -144,4 +166,12 @@
   ::view-transition-new(*) {
     animation: none !important;
   }
+}
+
+/*
+ * Keyboard focus below the sticky control bar: when Tab scrolls a control
+ * into view, leave room for the site header (76px) and the bar (~64px).
+ */
+#matchweek :is(a, button, [tabindex]):not(nav[aria-label='Matchweeks'] *) {
+  scroll-margin-top: 10rem;
 }
