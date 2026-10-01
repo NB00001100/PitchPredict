@@ -1,0 +1,147 @@
+/*
+ * Premier League page: page-specific surfaces and motion. Composed from the
+ * design tokens in index.css; nothing here is shared with other pages.
+ *
+ * Two visual languages, used at fixture and matchweek level alike:
+ * - PREDICTED is projected data: a cool blueprint dot grid behind a dashed
+ *   outline, numbers in mono. The cool tint is the atmosphere's floodlight
+ *   blue (rgb 150 200 255), never the pitch-green accent.
+ * - ACTUAL is the record: an opaque raised surface, solid border, a bright
+ *   top edge, the score in the bold display face.
+ */
+
+.pl-projected {
+  --pl-cool: rgb(150 200 255);
+  position: relative;
+  border: 1px dashed rgb(150 200 255 / 0.32);
+  background-color: rgb(150 200 255 / 0.025);
+  background-image: radial-gradient(rgb(150 200 255 / 0.16) 0.75px, transparent 1px);
+  background-size: 10px 10px;
+  background-position: -5px -5px;
+}
+
+/* Text in the cool "projected" voice: 11.9:1 on the page base. */
+.pl-cool-text {
+  color: rgb(196 222 255);
+}
+
+.pl-actual {
+  position: relative;
+  background-color: var(--color-grey-800);
+  border: 1px solid var(--color-hairline-strong);
+  box-shadow:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.14),
+    0 10px 24px -14px rgb(0 0 0 / 0.9);
+}
+
+/* A not-yet-played Actual zone keeps its solid frame, quieter. */
+.pl-actual[data-state='pending'] {
+  background-color: rgb(22 32 29 / 0.55);
+  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.06);
+}
+
+/* ---------- Entrances (transform and opacity only) ---------- */
+
+@keyframes pl-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes pl-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes pl-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Forecast bars fill from the home end. --pl-delay staggers them with their cards. */
+.pl-grow-x {
+  transform-origin: left center;
+  animation: pl-grow-x 700ms var(--ease-out-expo) both;
+  animation-delay: var(--pl-delay, 0ms);
+}
+
+/* Matchweek chart columns rise from the baseline. */
+.pl-grow-y {
+  transform-origin: center bottom;
+  animation: pl-grow-y 800ms var(--ease-out-expo) both;
+  animation-delay: var(--pl-delay, 0ms);
+}
+
+.pl-fade {
+  animation: pl-fade 500ms ease-out both;
+  animation-delay: var(--pl-delay, 0ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-grow-x,
+  .pl-grow-y,
+  .pl-fade {
+    animation: none;
+  }
+}
+
+/* Fade the picker's ends so it reads as a strip that continues. */
+.pl-strip-mask {
+  mask-image: linear-gradient(90deg, transparent, #000 1.25rem, #000 calc(100% - 1.25rem), transparent);
+}
+
+/* ---------- Directional matchweek change (React <ViewTransition> classes) ---------- */
+
+/*
+ * Next week arrives from the right, previous from the left: a short travel
+ * with a quick fade, old content leaving faster than new content arrives so
+ * the two never compete. Browsers without view transitions swap instantly.
+ */
+@keyframes mw-in {
+  from {
+    transform: translateX(var(--mw-offset));
+    opacity: 0;
+  }
+}
+
+@keyframes mw-out {
+  to {
+    transform: translateX(var(--mw-offset));
+    opacity: 0;
+  }
+}
+
+::view-transition-new(.mw-from-right) {
+  --mw-offset: 56px;
+  animation: mw-in 340ms var(--ease-out-expo) both;
+}
+::view-transition-new(.mw-from-left) {
+  --mw-offset: -56px;
+  animation: mw-in 340ms var(--ease-out-expo) both;
+}
+::view-transition-old(.mw-to-left) {
+  --mw-offset: -40px;
+  animation: mw-out 150ms var(--ease-in-out-quart) both;
+}
+::view-transition-old(.mw-to-right) {
+  --mw-offset: 40px;
+  animation: mw-out 150ms var(--ease-in-out-quart) both;
+}
+
+/* The two snapshots of a sliding block may differ in height: don't morph the box. */
+::view-transition-group(.mw-from-right),
+::view-transition-group(.mw-from-left),
+::view-transition-group(.mw-to-left),
+::view-transition-group(.mw-to-right) {
+  animation-duration: 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

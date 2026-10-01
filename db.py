@@ -17,13 +17,14 @@ def get_client():
     return create_client(url, key)
 
 
-def _fetch_all(sb, table, columns, order):
+def _fetch_all(sb, table, columns, order, eq=None):
+    """Every row of `table` (paged), optionally filtered on column == value pairs in `eq`."""
     rows, start = [], 0
     while True:
-        page = (
-            sb.table(table).select(columns).order(order)
-            .range(start, start + PAGE - 1).execute().data
-        )
+        q = sb.table(table).select(columns)
+        for col, val in (eq or {}).items():
+            q = q.eq(col, val)
+        page = q.order(order).range(start, start + PAGE - 1).execute().data
         rows.extend(page)
         if len(page) < PAGE:
             return rows
@@ -50,19 +51,49 @@ def load_matches(sb=None):
     return df.sort_values(["date", "id"]).reset_index(drop=True)
 
 
-def load_upcoming_fixtures(sb=None):
-    """Not-yet-played fixtures of the current matchweek (current_matchweek view).
-    Team names are football-data.org shortNames, not the names used in matches."""
-    sb = sb or get_client()
-    mw = sb.table("current_matchweek").select("matchweek").execute().data[0]["matchweek"]
-    if mw is None:
-        raise SystemExit("current_matchweek is null: no unfinished fixtures")
-    rows = (
-        sb.table("current_fixtures")
-        .select("id,matchweek,kickoff,status,home_team,away_team")
-        .eq("matchweek", mw).in_("status", ["SCHEDULED", "TIMED"])
-        .order("kickoff").execute().data
+UPCOMING_STATUSES = ("SCHEDULED", "TIMED")
+DEFAULT_DAYS = 8
+
+
+def select_upcoming(fixtures, now, days=DEFAULT_DAYS):
+    """Fixtures to forecast: status SCHEDULED/TIMED, kicking off after `now` and within
+    `days` days of it, whatever their matchweek number.
+
+    Date-driven on purpose: a postponed fixture left over from an old matchweek must
+    not hold back the next round (the current_matchweek view would, since it is the
+    lowest matchweek with any unfinished fixture). Each row keeps its own matchweek.
+    """
+    now = pd.Timestamp(now)
+    if fixtures.empty:
+        return fixtures
+    window = (
+        fixtures["status"].isin(UPCOMING_STATUSES)
+        & (fixtures["kickoff"] > now)
+        & (fixtures["kickoff"] <= now + pd.Timedelta(days=days))
     )
-    df = pd.DataFrame(rows)
+    return fixtures[window].sort_values(["kickoff", "id"]).reset_index(drop=True)
+
+
+def load_all_fixtures(sb=None, season=None):
+    """Fixtures from current_fixtures (all statuses), ordered by kickoff; only those of
+    `season` (e.g. '2026-2027') if given, since the table keeps old seasons' rows after
+    a new season is fetched. Team names are football-data.org shortNames."""
+    sb = sb or get_client()
+    cols = "id,season,matchweek,kickoff,status,home_team,away_team,home_goals,away_goals"
+    rows = _fetch_all(sb, "current_fixtures", cols, "id",
+                      eq={"season": season} if season else None)
+    df = pd.DataFrame(rows, columns=cols.split(","))
     df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True, format="ISO8601")
+    return df.sort_values(["kickoff", "id"]).reset_index(drop=True)
+
+
+def load_view(sb=None, season=None):
+    """Rows of the matchweek_predictions view (what the website shows), optionally one season."""
+    sb = sb or get_client()
+    rows = _fetch_all(sb, "matchweek_predictions", "*", "fixture_id",
+                      eq={"season": season} if season else None)
+    df = pd.DataFrame(rows)
+    for c in ("kickoff", "predicted_at"):
+        if c in df:
+            df[c] = pd.to_datetime(df[c], utc=True, format="ISO8601")
     return df

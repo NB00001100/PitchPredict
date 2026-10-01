@@ -1,8 +1,11 @@
-"""Load 6 seasons of Premier League results from football-data.co.uk into Supabase `matches`.
+"""Load Premier League results (2021/22 to the current season) from football-data.co.uk into Supabase `matches`.
 
 Usage:
     .venv/bin/python ingest_matches.py            # download, transform, upsert, validate
     .venv/bin/python ingest_matches.py --dry-run  # everything except touching Supabase
+
+The season list runs from seasons.FIRST_SEASON_YEAR to the current season, which is
+derived from today's date (seasons.py; override there).
 """
 
 import argparse
@@ -17,16 +20,11 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from seasons import CURRENT_SEASON, CURRENT_SEASON_YEAR, FIRST_SEASON_YEAR, season_code, season_label
+
 URL = "https://www.football-data.co.uk/mmz4281/{code}/E0.csv"
-SEASONS = {
-    "2122": "2021-2022",
-    "2223": "2022-2023",
-    "2324": "2023-2024",
-    "2425": "2024-2025",
-    "2526": "2025-2026",
-    "2627": "2026-2027",
-}
-CURRENT_SEASON = "2026-2027"
+# {"2122": "2021-2022", ..., current}; grows by one season each August.
+SEASONS = {season_code(y): season_label(y) for y in range(FIRST_SEASON_YEAR, CURRENT_SEASON_YEAR + 1)}
 COMPLETED_ROWS = 380
 CHUNK = 500
 CORE = ["kickoff", "home_team", "away_team", "home_goals", "away_goals"]
@@ -41,8 +39,13 @@ ODDS_SOURCES = [
 
 
 def download(code):
+    """The season CSV as a DataFrame, or None if the current season's file is not there yet."""
     resp = requests.get(URL.format(code=code), timeout=30)  # requests follows redirects
+    if resp.status_code == 404 and SEASONS.get(code) == CURRENT_SEASON:
+        return None  # early August: football-data.co.uk has not published the new file yet
     resp.raise_for_status()
+    if not resp.content.strip():
+        return None
     try:
         text = resp.content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -194,18 +197,19 @@ def report(df, title, odds_sources=True):
     return failures
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--dry-run", action="store_true", help="do everything except touch Supabase")
-    args = parser.parse_args()
-
+def run(dry_run=False, client=None):
+    """Download, validate and (unless dry_run) upsert every season. Exits non-zero on hard failures."""
     load_dotenv()
-    if not args.dry_run and not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY")):
+    if not dry_run and client is None and not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY")):
         sys.exit("SUPABASE_URL and SUPABASE_KEY must be set in .env (or use --dry-run).")
 
     frames = []
     for code, season in SEASONS.items():
         raw = download(code)
+        if raw is None or raw.empty:
+            print(f"{season}: WARNING no CSV published yet at {URL.format(code=code)}; skipped "
+                  "(normal in the first days of a season)")
+            continue
         frame = transform(raw, season)
         print(f"{season}: downloaded {len(raw)} raw rows, kept {len(frame)}")
         frames.append(frame)
@@ -218,12 +222,13 @@ def main():
 
     failures = report(df, "source dataframe")
 
-    if args.dry_run:
+    if dry_run:
         print("\nDry run: Supabase not touched.")
     else:
-        from supabase import create_client
+        if client is None:
+            from supabase import create_client
 
-        client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+            client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
         records = to_records(df)
         for i in range(0, len(records), CHUNK):
             client.table("matches").upsert(records[i:i + CHUNK], on_conflict="id").execute()
@@ -238,6 +243,13 @@ def main():
         print("\nHARD FAILURES:\n  " + "\n  ".join(failures))
         sys.exit(1)
     print("\nAll hard checks passed.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--dry-run", action="store_true", help="do everything except touch Supabase")
+    args = parser.parse_args()
+    run(args.dry_run)
 
 
 if __name__ == "__main__":

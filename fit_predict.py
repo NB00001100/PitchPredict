@@ -1,15 +1,20 @@
-"""Fit Dixon-Coles on all played matches, predict the upcoming matchweek, store forecasts.
+"""Fit Dixon-Coles on all played matches, predict the upcoming fixtures, store forecasts.
 
 Usage:
-    .venv/bin/python fit_predict.py            # fit, check, predict, write to predictions
-    .venv/bin/python fit_predict.py --dry-run  # everything except the write
+    .venv/bin/python fit_predict.py              # fit, check, predict, write to predictions
+    .venv/bin/python fit_predict.py --dry-run    # everything except the write
+    .venv/bin/python fit_predict.py --days 10    # widen the window (default 8 days)
+
+"Upcoming" is date-driven: every SCHEDULED/TIMED fixture of the current season kicking
+off within the next --days days, whatever its matchweek, each stored with its own
+matchweek. A postponed fixture from an old matchweek therefore cannot hold the
+predictions back. No fixtures in the window (an international break) is not an error.
 
 Teams promoted this season are fit with the shrinkage prior from shrinkage.py
 (strength `shrink` from model_config.json; 0 = plain fit).
 
-Intended cadence: refit after every matchday, once `matches` has been refreshed by
-ingest_matches.py. Nothing is scheduled here; the caller is assumed to have refreshed
-`matches` (and current_fixtures) before running this.
+refresh.py runs this after refreshing current_fixtures and matches; run standalone,
+the caller is assumed to have refreshed them first.
 """
 
 import argparse
@@ -20,37 +25,16 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from db import get_client, load_matches, load_upcoming_fixtures
-from shrinkage import clean_number, fit_with_promoted_prior, promoted_teams
+import pandas as pd
+
+from db import DEFAULT_DAYS, get_client, load_all_fixtures, load_matches, select_upcoming
+from seasons import CURRENT_SEASON, PREVIOUS_SEASON
+from shrinkage import clean_number, fit_with_promoted_prior
+from teams import check_team_names, promoted_model_names, to_model_name
 
 DEFAULT_XI = 0.0018
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_config.json")
-CURRENT_SEASON = "2026-2027"
 TABLE = "predictions"
-
-# football-data.org shortName (current_fixtures) -> football-data.co.uk name (matches).
-TEAM_MAP = {
-    "Arsenal": "Arsenal",
-    "Aston Villa": "Aston Villa",
-    "Bournemouth": "Bournemouth",
-    "Brentford": "Brentford",
-    "Brighton Hove": "Brighton",
-    "Chelsea": "Chelsea",
-    "Coventry City": "Coventry",
-    "Crystal Palace": "Crystal Palace",
-    "Everton": "Everton",
-    "Fulham": "Fulham",
-    "Hull City": "Hull",
-    "Ipswich Town": "Ipswich",
-    "Leeds United": "Leeds",
-    "Liverpool": "Liverpool",
-    "Man City": "Man City",
-    "Man United": "Man United",
-    "Newcastle": "Newcastle",
-    "Nottingham": "Nott'm Forest",
-    "Sunderland": "Sunderland",
-    "Tottenham": "Tottenham",
-}
 
 
 def load_params():
@@ -80,21 +64,31 @@ def print_shrinkage(model, promoted, shrink):
 
 
 def map_team(name):
-    if name not in TEAM_MAP:
-        sys.exit(f"ERROR: fixture team {name!r} has no entry in TEAM_MAP; add it before predicting")
-    return TEAM_MAP[name]
+    try:
+        return to_model_name(name)
+    except KeyError as e:
+        sys.exit(f"ERROR: {e.args[0]}")
 
 
-def check_ratings(model, df, fixtures):
+def model_version_for(xi, shrink):
+    return f"dc-xi{xi}-shrink{shrink}" if shrink > 0 else f"dc-xi{xi}"
+
+
+def check_ratings(model, df, fixtures, season_fixtures=None):
     """Print the ratings table; exit on hard failures, print warnings otherwise."""
     cur = df[df["season"] == CURRENT_SEASON]
-    teams = sorted(set(cur["home_team"]) | set(cur["away_team"]),
-                   key=lambda t: model.attack.get(t, float("-inf")), reverse=True)
+    names = set(cur["home_team"]) | set(cur["away_team"])
+    if season_fixtures is not None:  # before matchweek 1, matches has no current-season rows
+        names |= {map_team(t) for t in set(season_fixtures["home_team"]) | set(season_fixtures["away_team"])}
+    teams = sorted(names, key=lambda t: model.attack.get(t, float("-inf")), reverse=True)
 
     print(f"\nRatings for {len(teams)} teams of {CURRENT_SEASON} (sorted by attack):")
-    print(f"  {'team':<16} {'attack':>8} {'defense':>8} {'mp 26-27':>8}")
+    print(f"  {'team':<16} {'attack':>8} {'defense':>8} {'mp ' + CURRENT_SEASON[2:4] + '-' + CURRENT_SEASON[7:]:>8}")
     for t in teams:
         n = int(((cur["home_team"] == t) | (cur["away_team"] == t)).sum())
+        if t not in model.attack:
+            print(f"  {t:<16} {'unrated':>8} {'':>8} {n:8d}")
+            continue
         print(f"  {t:<16} {model.attack[t]:8.3f} {model.defense[t]:8.3f} {n:8d}")
     print(f"  home_adv = {model.home_adv:.3f}   rho = {model.rho:.3f}   "
           f"converged = {model.converged}   iterations = {model.n_iter}")
@@ -120,7 +114,7 @@ def check_ratings(model, df, fixtures):
     if len(big) < 2:
         print(f"WARNING: only {big or 'none'} of Man City/Arsenal/Liverpool in the top five attacks ({top5})")
     extreme = [f"{t} (att {model.attack[t]:+.2f}, def {model.defense[t]:+.2f})" for t in teams
-               if abs(model.attack[t]) > 1.0 or abs(model.defense[t]) > 1.0]
+               if t in model.attack and abs(model.attack[t]) > 1.0 or abs(model.defense[t]) > 1.0]
     if extreme:
         print("WARNING: ratings beyond +/-1.0, likely resting on very few matches: " + ", ".join(extreme))
 
@@ -156,43 +150,79 @@ def print_predictions(preds):
               f"{p['exp_home_goals']:5.2f} {p['exp_away_goals']:5.2f} {p['modal_score']:>5}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dry-run", action="store_true", help="everything except the write to Supabase")
-    args = parser.parse_args()
+def run(sb=None, dry_run=False, days=DEFAULT_DAYS, now=None):
+    """Forecast every fixture in the window. Returns a small summary dict.
 
+    Writes nothing when dry_run, or when no fixture is in the window.
+    """
     xi, shrink = load_params()
-    model_version = f"dc-xi{xi}-shrink{shrink}" if shrink > 0 else f"dc-xi{xi}"
-    predicted_at = datetime.now(timezone.utc)  # one timestamp for the whole run
+    model_version = model_version_for(xi, shrink)
+    predicted_at = pd.Timestamp(now) if now is not None else pd.Timestamp(datetime.now(timezone.utc))
 
-    sb = get_client()
+    sb = sb or get_client()
     df = load_matches(sb)
-    fixtures = load_upcoming_fixtures(sb)
+    season_fixtures = load_all_fixtures(sb, CURRENT_SEASON)
+    fixtures = select_upcoming(season_fixtures, predicted_at, days)
+    window_end = predicted_at + pd.Timedelta(days=days)
     ref_date = df["date"].max()
-    print(f"Loaded {len(df)} played matches; latest match date used: {ref_date:%Y-%m-%d %H:%M} UTC")
-    print(f"Loaded {len(fixtures)} upcoming fixtures (matchweek {sorted(fixtures['matchweek'].unique().tolist())})")
+    print(f"Season {CURRENT_SEASON}: loaded {len(df)} played matches; latest match date used: "
+          f"{ref_date:%Y-%m-%d %H:%M} UTC")
+    summary = {"model_version": model_version, "predicted_at": predicted_at, "window_end": window_end,
+               "in_window": len(fixtures), "written": 0}
+
+    if fixtures.empty:
+        later = season_fixtures[season_fixtures["status"].isin(["SCHEDULED", "TIMED"])
+                                & (season_fixtures["kickoff"] > predicted_at)]
+        nxt = f"next kickoff {later['kickoff'].min():%Y-%m-%d %H:%M} UTC" if len(later) else "no later fixtures"
+        print(f"No SCHEDULED/TIMED fixtures kick off between {predicted_at:%Y-%m-%d %H:%M} and "
+              f"{window_end:%Y-%m-%d %H:%M} UTC ({days}-day window; {nxt}). "
+              "Nothing to predict, which is normal during an international break.")
+        return summary
+
+    weeks = sorted(fixtures["matchweek"].unique().tolist())
+    print(f"{len(fixtures)} fixture(s) kick off in the next {days} days "
+          f"(matchweek {', '.join(map(str, weeks))}; {fixtures['kickoff'].min():%Y-%m-%d %H:%M} to "
+          f"{fixtures['kickoff'].max():%Y-%m-%d %H:%M} UTC)")
+
+    if not check_team_names(season_fixtures, df, CURRENT_SEASON, now=predicted_at):
+        sys.exit("ERROR: fix teams.py (see above) before predicting")
 
     # Fit once on everything played, current season included; promoted teams shrunk.
-    promoted = promoted_teams(df, CURRENT_SEASON)
+    promoted = promoted_model_names(season_fixtures, df, PREVIOUS_SEASON)
     model = fit_with_promoted_prior(df, ref_date, xi, shrink, promoted)
     print_shrinkage(model, promoted, shrink)
-    check_ratings(model, df, fixtures)
+    check_ratings(model, df, fixtures, season_fixtures)
 
     preds = predict_fixtures(model, fixtures)
     print_predictions(preds)
+    # Selection guarantees this; asserted because the view only ever shows forecasts
+    # made at or before kickoff.
+    assert all(p["kickoff"] > predicted_at for p in preds), "forecast after kickoff"
 
     rows = [{k: v for k, v in p.items() if k != "kickoff"}
             | {"model_version": model_version, "predicted_at": predicted_at.isoformat()}
             for p in preds]
 
-    if args.dry_run:
+    if dry_run:
         print(f"\nDry run: {len(rows)} rows not written ({model_version}, predicted_at {predicted_at.isoformat()}).")
-        return
+        return summary
 
     # predicted_at is part of the key, so each run appends a new forecast set instead of
     # overwriting earlier ones; that history is what lets us measure skill by lead time.
+    # The matchweek_predictions view shows only the latest one made before kickoff.
     sb.table(TABLE).upsert(rows, on_conflict="fixture_id,model_version,predicted_at").execute()
     print(f"\nUpserted {len(rows)} rows into {TABLE} ({model_version}, predicted_at {predicted_at.isoformat()}).")
+    summary["written"] = len(rows)
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dry-run", action="store_true", help="everything except the write to Supabase")
+    parser.add_argument("--days", type=float, default=DEFAULT_DAYS,
+                        help=f"predict fixtures kicking off within this many days (default {DEFAULT_DAYS})")
+    args = parser.parse_args()
+    run(dry_run=args.dry_run, days=args.days)
 
 
 if __name__ == "__main__":

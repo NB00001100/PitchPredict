@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>PitchPredict</title>
+  <defs>
+    <clipPath id="disc"><circle cx="256" cy="256" r="256"/></clipPath>
+  </defs>
+  <circle cx="256" cy="256" r="256" fill="#fff"/>
+  <g clip-path="url(#disc)">
+    <!-- pitch markings: halfway line, penalty areas and their arcs -->
+    <g fill="none" stroke="#000" stroke-width="22">
+      <path d="M256 0V146M256 366V512"/>
+      <rect x="-40" y="168" width="110" height="176"/>
+      <rect x="442" y="168" width="110" height="176"/>
+      <path d="M70 216A48 48 0 0 1 70 296M442 216A48 48 0 0 0 442 296"/>
+    </g>
+    <circle cx="256" cy="256" r="98" fill="none" stroke="#000" stroke-width="28"/>
+  </g>
+  <g fill="#000">
+    <!-- plotted points rising towards the centre -->
+    <circle cx="112" cy="420" r="16"/>
+    <circle cx="146" cy="378" r="12"/>
+    <circle cx="172" cy="344" r="9"/>
+    <!-- sparkles and dots, after the Draft Sorcerer mark -->
+    <path d="M380 76Q385 107 416 112Q385 117 380 148Q375 117 344 112Q375 107 380 76Z"/>
+    <path d="M410 176Q412.5 189.5 426 192Q412.5 194.5 410 208Q407.5 194.5 394 192Q407.5 189.5 410 176Z"/>
+    <circle cx="322" cy="70" r="10"/>
+    <circle cx="442" cy="128" r="8"/>
+    <!-- the prediction: a spark on the centre spot -->
+    <path d="M256 188Q266 246 324 256Q266 266 256 324Q246 266 188 256Q246 246 256 188Z"/>
+  </g>
+</svg>

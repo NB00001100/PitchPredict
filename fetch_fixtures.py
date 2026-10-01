@@ -1,22 +1,27 @@
-"""Load the 2026/27 Premier League schedule from football-data.org into Supabase.
+"""Load the current Premier League season's schedule from football-data.org into Supabase.
 
 Usage:
     .venv/bin/python fetch_fixtures.py            # fetch, validate, upsert into current_fixtures
     .venv/bin/python fetch_fixtures.py --dry-run  # fetch and validate only; Supabase is not touched
+
+The season comes from seasons.py (derived from today's date; override there).
 """
 
 import argparse
 import os
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
 
+from seasons import CURRENT_SEASON, CURRENT_SEASON_YEAR
+
 API_URL = "https://api.football-data.org/v4/competitions/PL/matches"
-API_SEASON = 2026
-SEASON = "2026-2027"
+API_SEASON = CURRENT_SEASON_YEAR  # football-data.org names a season by its start year
+SEASON = CURRENT_SEASON
 TABLE = "current_fixtures"
 CHUNK_SIZE = 500
 
@@ -28,13 +33,25 @@ def require_env(names):
 
 
 def fetch_matches(api_key):
-    # One request returns the whole season; free tier allows 10 calls/min.
-    resp = requests.get(
-        API_URL,
-        params={"season": API_SEASON},
-        headers={"X-Auth-Token": api_key},
-        timeout=30,
-    )
+    # One request returns the whole season; free tier allows 10 calls/min. Transient
+    # failures (rate limit, server error, network) are retried a couple of times.
+    for attempt in range(3):
+        try:
+            resp = requests.get(
+                API_URL,
+                params={"season": API_SEASON},
+                headers={"X-Auth-Token": api_key},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            if attempt == 2:
+                sys.exit(f"ERROR: could not reach football-data.org: {e}")
+            print(f"football-data.org request failed ({e.__class__.__name__}); retrying in 20 s")
+        else:
+            if resp.status_code != 429 and resp.status_code < 500 or attempt == 2:
+                break
+            print(f"football-data.org returned HTTP {resp.status_code}; retrying in 20 s")
+        time.sleep(20)
     if resp.status_code != 200:
         sys.exit(f"ERROR: football-data.org returned HTTP {resp.status_code}\n{resp.text}")
     return resp.json()["matches"]
@@ -143,10 +160,11 @@ def report(rows, skipped, now):
         print("   WARNING: some team name maps to more than one TLA (see above)")
 
 
-def load(rows):
-    from supabase import create_client
+def load(rows, client=None):
+    if client is None:
+        from supabase import create_client
 
-    client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
     for i in range(0, len(rows), CHUNK_SIZE):
         chunk = rows[i:i + CHUNK_SIZE]
         client.table(TABLE).upsert(chunk, on_conflict="id").execute()
@@ -155,28 +173,36 @@ def load(rows):
     return resp.count
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dry-run", action="store_true", help="fetch and validate only; do not touch Supabase")
-    args = parser.parse_args()
-
+def run(dry_run=False, client=None):
+    """Fetch, validate and (unless dry_run) upsert. Returns the number of fixtures fetched."""
     load_dotenv()
-    require_env(["FOOTBALL_DATA_API_KEY"] if args.dry_run
+    require_env(["FOOTBALL_DATA_API_KEY"] if dry_run
                 else ["FOOTBALL_DATA_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"])
 
     now = datetime.now(timezone.utc)
     matches = fetch_matches(os.environ["FOOTBALL_DATA_API_KEY"])
     print(f"Fetched {len(matches)} matches from football-data.org (season={API_SEASON})")
+    if not matches:
+        sys.exit(f"ERROR: football-data.org returned no matches for season {API_SEASON}; "
+                 "is the fixture list published yet? (seasons.SEASON_START_YEAR overrides the season)")
     rows, skipped = to_rows(matches, now)
 
     report(rows, skipped, now)
 
-    if args.dry_run:
+    if dry_run:
         print("\n5. Dry run: Supabase not touched.")
     else:
         print()
-        table_count = load(rows)
+        table_count = load(rows, client)
         print(f"\n5. Rows in {TABLE} after upsert: {table_count}")
+    return len(matches)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dry-run", action="store_true", help="fetch and validate only; do not touch Supabase")
+    args = parser.parse_args()
+    run(args.dry_run)
 
 
 if __name__ == "__main__":
