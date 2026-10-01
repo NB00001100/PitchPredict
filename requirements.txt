@@ -1,5 +1,7 @@
 penaltyblog
 pandas
+numpy
+scipy
 supabase
 requests
 python-dotenv
