@@ -1,0 +1,53 @@
+{
+  "topic": "Best model for predicting Premier League match results for a full match week (for a prediction application)",
+  "personas": [
+    {
+      "id": "domain-expert",
+      "name": "Dr. Helena Marsh",
+      "role": "Sports statistician; publishes on football outcome models (Poisson/Dixon-Coles, Elo, xG-based ratings)",
+      "background": "Fifteen years modelling football outcomes in academia and for a data provider. Has implemented Maher, Dixon-Coles, bivariate Poisson, and Bradley-Terry/Elo variants against decades of English league data. Reviews sports analytics papers and knows which published accuracy claims survive replication.",
+      "stake": "Wants the app to be built on a model whose assumptions are sound and whose evaluation is honest, so the field is not embarrassed by another over-fitted 'AI beats bookmakers' claim.",
+      "biases": "Prefers interpretable parametric models; suspicious of deep learning on tiny datasets; overestimates how much a general reader cares about likelihood theory; dismisses simple heuristics that work 'well enough'."
+    },
+    {
+      "id": "practitioner",
+      "name": "Tomasz Nowak",
+      "role": "ML engineer who runs a live football prediction service (weekly retrain, public API, ~40k users)",
+      "background": "Built and operates a prediction pipeline for European leagues: data ingestion from a commercial API, feature store, weekly gradient-boosted retraining, and a Brier-score dashboard. Has been burned by fixture postponements, data-provider schema changes, and a model that silently degraded after a season rollover.",
+      "stake": "Needs a model that is cheap to run, robust to missing data at Friday-evening prediction time, and whose performance can be monitored so he notices decay before users do.",
+      "biases": "Anchored to gradient boosting and his own stack; assumes everyone has a paid data feed; underweights model elegance in favour of operability; suspicious of academic models that were never run in production."
+    },
+    {
+      "id": "skeptic",
+      "name": "Rachel Okafor",
+      "role": "Former quant at a sports betting syndicate; now writes critically about sports prediction products",
+      "background": "Spent years trying to beat closing lines on the Premier League with far more data and compute than any hobby project. Has audited dozens of 'record-breaking' tipster and AI prediction claims and found nearly all were selection bias, leakage, or tiny samples.",
+      "stake": "Wants any accuracy claim the app makes to be defensible against the trivial baseline of copying bookmaker odds, and wants the builder to understand what they are actually competing against.",
+      "biases": "Over-indexes on the efficient-market view; may dismiss modelling as pointless when the app's goal is not to beat the market but to give users a defensible forecast; treats every accuracy claim as fraudulent until proven otherwise."
+    },
+    {
+      "id": "newcomer",
+      "name": "Dev Patel",
+      "role": "Full-stack developer building a Premier League matchweek prediction app as a side project; no stats background",
+      "background": "Comfortable with APIs, databases, and shipping web apps; has never trained a model beyond a tutorial. Has read headlines about 'AI predicting football with 80% accuracy' and is unsure what a realistic target is or where to get data.",
+      "stake": "Needs to pick one approach to build in a few weekends, know what data to fetch, and know whether the result will look credible to users who follow the league closely.",
+      "biases": "Anchors on popular-press accuracy numbers; assumes 'more AI' means better; conflates predicting the winner, the score, and the probability; assumes free data is good enough."
+    },
+    {
+      "id": "adjacent-expert",
+      "name": "Ingrid Sørensen",
+      "role": "Operational weather forecaster and verification specialist (probabilistic ensemble forecasting)",
+      "background": "Runs verification for a national meteorological service: reliability diagrams, Brier and ranked probability scores, ensemble calibration, and forecast-vs-persistence baselines. Has consulted on applying forecast-verification practice to other domains.",
+      "stake": "Sees football outcome prediction as a low-signal probabilistic forecasting problem and wants to know whether the football field has adopted proper scoring rules, ensembling, and calibration, or is still reporting hit-rates.",
+      "biases": "May force weather analogies that do not hold (football has no physics-based model); over-values calibration relative to what an app user perceives as 'getting it right'."
+    },
+    {
+      "id": "product-owner",
+      "name": "Marcus Bell",
+      "role": "Product manager for a consumer sports-prediction / tipping app in the UK",
+      "background": "Has shipped prediction features to hundreds of thousands of users and watched what they actually engage with and complain about. Has dealt with UK gambling-advertising rules, affiliate relationships with bookmakers, and users who judge the app on 'how many did you get right this week'.",
+      "stake": "Needs the model output to be presentable, explainable, and judged fairly by users who only remember the misses; also needs to know the legal line between a prediction app and a betting product.",
+      "biases": "Optimises for perceived accuracy and engagement over statistical correctness; assumes users want a single pick per match rather than probabilities; underestimates modelling difficulty."
+    }
+  ]
+}

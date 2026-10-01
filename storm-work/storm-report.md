@@ -1,0 +1,941 @@
+# STORM Research Report: Best model for predicting a Premier League matchweek
+
+**Date:** 2026-09-22  
+**Method:** STORM (personas → in-persona questions → retrieval → synthesis)  
+**Questions:** 30 unique (45 raw before dedup) — 22 answered, 8 partial, 0 unanswered  
+**Retrieval:** web search with primary sources where reachable; direct computation on football-data.co.uk CSVs 2015/16–2025/26 for base rates, home advantage, Dixon-Coles ρ and market RPS; model-knowledge marked per answer.
+
+---
+
+# Part 1 — Outline
+
+
+> **Framing.** This research asks which model a developer should build into an app that forecasts every match in a Premier League matchweek, and how to judge whether it is any good. Six lenses were used (statistician, ML engineer, betting-market skeptic, newcomer developer, weather-forecast verification specialist, consumer product manager); 30 deduplicated questions were answered mostly from primary literature, vendor pages, and direct computation on football-data.co.uk results 2015/16–2025/26.
+>
+> **Headline findings.**
+> 1. **The ceiling is low and known.** De-vigged closing bookmaker odds, the best forecaster available, pick the PL winner only 49.5–60% of the time per season (RPS ≈ 0.18–0.21). Honest models land at 52–56% accuracy. Any claim much above 60% over a full season is a leakage or selection-bias signal.
+> 2. **Model class barely matters; inputs and evaluation do.** Time-weighted Poisson/Dixon-Coles, Elo→logit, gradient boosting on ratings and neural nets all sit within ~0.001–0.005 RPS of each other; no ML, deep-learning or LLM entry has beaten a well-tuned goals model or the market on PL 1X2. The one credible published edge is a Bayesian state-space model with time-varying strengths and home advantage.
+> 3. **Recommended build:** a time-weighted Dixon-Coles (or independent Poisson) goals model on 3–5 seasons of free football-data.co.uk data with a time-varying league-level home advantage, optionally blended with de-vigged closing odds; evaluated walk-forward on RPS + log loss against climatology and market baselines; surfaced as three probabilities plus a derived pick, because the argmax pick will essentially never be a draw.
+
+---
+
+## 1. What "predicting a match" means, and the realistic ceiling
+
+### 1.1 The forecast object is a probability vector (or a score grid), not a pick
+- Literature, libraries and public products all produce P(home), P(draw), P(away); goals models produce a full scoreline matrix from which 1X2, totals and correct-score are read consistently (q01 — penaltyblog docs, Opta Analyst, FiveThirtyEight SPI README).
+- The argmax "winner" hides that the favourite is only ~52–56% likely on average; the modal exact score is only ~8–12% likely (q01; second figure is model-knowledge).
+
+### 1.2 Base rates and trivial baselines, PL 2021/22–2025/26 (computed from football-data.co.uk)
+- Home/draw/away by season: 42.9/23.2/33.9, 48.4/22.9/28.7, 46.1/21.6/32.4, 40.8/24.5/34.7, 42.6/27.4/30.0. "Always home" ≈ 41–48%; "always draw" ≈ 22–27% (q03).
+- "Pick the closing favourite": 59.2%, 55.5%, 60.0%, 55.5%, 49.5% (five-season mean ≈ 56%); market RPS 0.181–0.205 vs 0.227–0.235 for a base-rate-only model (q03, q20 — footballproofai independently reports 55.98% over 1,899 matches).
+- A "higher-ranked team" baseline was not found published; expect it slightly below the favourite baseline (q03 — inference).
+
+### 1.3 Football is near the random end of team sports
+- Ben-Naim et al. upset probability q ≈ 0.45 for soccer vs ≈ 0.35 for NBA/NFL; Aoki et al. (KDD 2017) conclude luck is substantial even in top leagues and "partially explains why sophisticated ... models hardly beat simple models" (q04).
+- Goals are low and roughly Poisson (2.75–3.28 per match, variance 2.5–3.2), so a one-goal swing is within one SD of the goals process (q04 — computed).
+- The PL is actually among Europe's *more* predictable leagues by bookmaker log loss (StatsBomb); the ceiling is a property of the sport, not the league (q04).
+- Because draws are 22–27% likely but almost never the modal outcome, argmax picks never predict them; combined with mean favourite probability 0.52–0.56, a well-calibrated model's expected accuracy is mid-50s (q04, q28).
+
+## 2. Model families: what the evidence says about each
+
+### 2.1 Poisson / Dixon-Coles goals models are the reference standard
+- Poisson: goals ~ attack × opponent defence × home advantage; Dixon-Coles adds a low-score dependence term ρ and exponential time decay (q02).
+- Ley et al. 2019 on EPL 2008/09–2017/18: bivariate Poisson RPS 0.1953 vs independent Poisson 0.1954 vs Bradley-Terry/Thurstone-Mosteller ≈ 0.1985; penaltyblog's 2025 backtest gives the same ordering (DC 0.1914, Poisson 0.1915, bivariate 0.1916, pi-ratings 0.1991, Elo 0.2042) (q05).
+- Hubáček et al. 2019 review: time-weighted double Poisson (α = 0.0019/day) beat Elo, pi-ratings and PageRank (RPS 0.2082 vs 0.2088/0.2092/0.2128) (q05).
+
+### 2.2 The Dixon-Coles ρ correction is immaterial for 1X2, relevant for correct-score markets
+- Original ρ = −0.13; per-season EPL MLEs 2015/16–2025/26 range −0.16 to +0.06 with log-likelihood gains of only 0–2.6 units per season; rolling out-of-sample 1X2 RPS differs from independent Poisson by ≤ 0.0002 in every season (q07 — own computation on football-data.co.uk).
+- Keep ρ only if the app also shows correct score / BTTS / under-2.5 (q07). See Conflicts: *Does low-score dependence exist?*
+
+### 2.3 Elo and rating systems are competitive when mapped to 1X2 properly
+- Elo needs an extra step (empirical draw curve or multinomial logit on rating difference) to yield 1X2; ClubElo uses K = 20, margin-of-victory multiplier and a per-country home-field term (~30–85 points) (q02, q08).
+- A 2022–2026 walk-forward benchmark (1,520 PL matches) ranked Elo→multinomial logit (Brier 0.1951, RPS 0.2015) *above* sequential Dixon-Coles (0.2051 / 0.2169), with the closing market at 0.1901 / 0.1947 (q19, q15). See Conflicts: *Dixon-Coles vs Elo ordering*.
+
+### 2.4 Gradient boosting, deep learning and LLMs: no demonstrated edge on 1X2
+- 2017 Soccer Prediction Challenge: XGBoost on pi-ratings won at RPS 0.2063 / 52.4%, but all published entries sat in 0.2054–0.2087 and the bookmaker baseline was 0.2020 / 51.9% (q05, q14).
+- 2023 challenge: CatBoost + pi-ratings 0.2085, deep model 0.2098, bookmaker consensus 0.2063; Fischer & Heuer find NN, random forest and Poisson "perform similarly" across five leagues (q14, q23).
+- LLMs: an Aug 2026 study reranking Dixon-Coles scorelines with a frontier LLM on EPL 2025/26 got 50.0% vs the baseline's 53.3%; World Cup 2026 arenas show LLMs statistically indistinguishable from de-vigged consensus and 0.94 correlated with each other, with memorisation risk on any historical backtest (q23).
+- Maintenance: a DC/Elo pipeline has a handful of parameters and refits in seconds (penaltyblog: 50k matches in 3.2 s); a GBT stack needs a feature store, re-tuning and drift monitoring for a published gain of ~0.001–0.005 RPS (q14, q15 — cost comparison is model-knowledge).
+
+### 2.5 Bayesian / dynamic models: the only class with a credible published edge
+- 2025 JRSS-C Bayesian state-space model (time-varying attack/defence and home advantage): cumulative RPS 17.55 over 14 EPL test seasons vs 22.22 for weighted-likelihood Dixon-Coles and 20.71 for Koopman-Lit score-driven (q05).
+- Koopman & Lit show it is *dynamics*, not the estimation paradigm, that moves RPS (England static bivariate Poisson 0.2062 vs dynamic 0.1987); a 2026 Bayesian EPL study decomposes predictive variance as 0.6% parameter vs 99.4% aleatoric, so posterior uncertainty mostly buys honest early-season shrinkage (q26).
+- Cost is fine for weekly batch: PyMC Baio-Blangiardo ≈ 38 s; a three-model hierarchical ensemble ≈ 186 s; footBayes exposes Stan back-ends (q26).
+
+## 3. Inputs that actually move the needle
+
+### 3.1 Time decay: ~1-year half-life, plus a between-season reset
+- Dixon-Coles ξ = 0.0065 per half-week ≈ 0.00186/day (half-life ≈ 373 days); opisthokonta 0.0018/day England; Ley et al. 390-day half-period; anything 0.0018–0.003/day is defensible and ~1–2 seasons of data matter (q08).
+- The JRSS-C model estimates within-season forgetting 0.988/match and between-season 0.770, i.e. an explicit summer reset; 538-style systems regress ~1/3 to the mean between seasons (q08, q16).
+
+### 3.2 Home advantage is real, time-varying, and must not be hard-coded
+- Home-win % by season 2015/16–2025/26: 41.3, 49.2, 45.5, 47.6, 45.3, **37.9 (2020/21)**, 42.9, 48.4, 46.1, **40.8 (2024/25)**, 42.6; log-scale Poisson home multiplier swings 0.06–0.29 outside COVID (q09 — computed, cross-checked with premierleague.com and Opta).
+- Estimate as a single league-level time-varying parameter (state-space, or refit on trailing 2–3 seasons with the same decay); team-specific effects are weakly identified with 19 home games per season (q09). See Conflicts: *How big is the post-COVID home effect?*
+
+### 3.3 xG: better descriptor, marginal forecaster
+- xG correlates better with future goal ratio (r = 0.574 vs 0.47 goals) (q06 — Mead et al. 2023).
+- The only direct xG-DC vs goals-DC comparison found: ΔRPS +0.00026, 95% CI [−0.0035, +0.0039]; "the closing line has already priced expected goals". Wilkens 2026 (Bundesliga) finds the market still better calibrated than an xG-Skellam model (q06). **Partial** — no PL-level peer-reviewed comparison exists.
+- Practical: FBref stopped carrying Opta xG in January 2026; Understat is scrape-only (q12).
+
+### 3.4 Lineups, injuries, market value: ~1–2% RPS at best
+- Arntzen & Hvattum: Elo + starting-XI plus-minus is "significantly better" than either alone (effect size not in abstract) (q10).
+- Lagged Transfermarkt squad value forecasts UEFA matches as well as Elo (RPS×100 19.53 vs 19.73), pooled 19.43; useful as a pre-season / promoted-team prior (q08, q10).
+- Manager changes: Heuer et al. find "basically no effect"; do not add ad-hoc adjustments (q08).
+- Expected gain from availability features ≈ 0.001–0.003 RPS, concentrated in multi-absence matches and the first ~10 rounds after a window (q10 — **partial**, inferred).
+
+## 4. The betting market as benchmark and as input
+
+### 4.1 De-vigged closing odds are the strongest single forecast; nobody beats them out of sample
+- Closing favourite 55.98% over 1,899 EPL matches; Pinnacle closing prices return 99.73% when every outcome is bet (unbiased); market RPS band 0.19–0.21 across sources (q20).
+- Hubáček 2019 "exploiting the market" is an **NBA** study whose profit came from decorrelating from the bookmaker, and is frequently miscited as football evidence; Koopman & Lit find no results-only model beats the bookmaker across 6 leagues / 17 seasons; older "profitable" pi-ratings results bet against soft average odds with 10–12% overrounds (q20, q17).
+
+### 4.2 What a model adds if the market is better
+- Coverage when odds are absent or stale (early week, cups), a house view for explanations, and decorrelation for betting-style products (q17).
+- Odds as input: Wunderlich & Memmert's ELO-Odds beats result-Elo; Egidi et al.'s odds+history Bayesian model still scores slightly below de-vigged Shin odds on average correct probability (EPL 0.435 vs 0.452) (q25). See Conflicts: *Odds-informed models: profitable yet less accurate?*
+
+### 4.3 De-vigging method and licensing
+- Štrumbelj 2014: Shin beats basic normalisation; Berk 2024 and a 2026 EMH paper: power or multiplicative is as good in today's low-margin markets (q17). See Conflicts: *Shin vs power*.
+- Oddsportal terms forbid commercial use and scraping; The Odds API allows display in commercial apps and model training but bans redistribution (free 500 credits/month, 20K for $30); Betfair API is free for personal use only (q17, q12).
+
+### 4.4 Calibration: models are calibrated enough; resolution is the deficit
+- Favourite-longshot bias exists but is small (~2% loss at short odds vs ~15% at >5.00; draws show a *negative* longshot bias) (q24).
+- Foulley: Poisson-Elo reliability component only 3.6–4.7% of Brier; bookmakers win on resolution (home-win resolution 34.5% vs 29.5%); draws are near-unforecastable for both (skill 1.4–3.0%) (q24).
+- Recalibration (isotonic, Platt) is used but cannot fix resolution; 538's own calibration page showed slight overconfidence on heavy favourites (q24).
+
+### 4.5 Ensembling: modest gains, mostly from adding market information
+- Bookmaker consensus models beat Elo/FIFA ratings for tournaments (Leitner et al. 2010); a 2026 Bayesian outcome-specific ensemble on 751 EPL matches improved Brier only 0.195 → 0.193; no football paper shows NWP-style gains from averaging structurally different models (q25).
+- Koopman & Lit: effort should go to "more and better explanatory variables rather than better models" (q25).
+
+## 5. Honest evaluation
+
+### 5.1 Metrics: report RPS *and* log loss, never lead with accuracy
+- RPS (Constantinou & Fenton 2012) is the de-facto football metric and the official challenge metric; Wheatcroft 2021 argues the ignorance/log score selects the better forecaster more reliably and that RPS's distance-sensitivity "adds nothing" (q11). See Conflicts: *RPS vs log score*.
+- Baselines: climatology (PL 2021–26 RPS ≈ 0.227–0.235) and de-vigged closing odds (RPS 0.181–0.205, log loss 0.90–1.01); report skill = 1 − RPS_model / RPS_baseline. Landing between the two is useful; within 0.002 of the market is excellent (q11).
+
+### 5.2 Walk-forward protocol
+- Sort by kickoff; enforce max(train time) < min(test time); expanding-window by matchweek or season; point-in-time features (backward-only joins, rolling form excludes the match itself, season-to-date starts at zero); fit calibration on out-of-sample training predictions and freeze; report per-season scores; require ≥500 settled test matches, ≥3 windows (q21).
+- Exclude or separately score the first 5–10 rounds each season, as opisthokonta and Hubáček did, because promoted teams have no data (q16).
+
+### 5.3 Sample size: one season cannot distinguish similar models
+- Per-match RPS SD ≈ 0.135; paired tests required. Detecting a 0.005 RPS gap between loosely related models needs ~6,000 matches (~16 PL seasons); a 0.002 gap between highly correlated models needs ~150–250. One 380-match season resolves only ~0.02 RPS (q21 — own power calculation, **partial**: no published N).
+
+### 5.4 Leakage patterns behind "70–80% accuracy" claims
+- Half-time or full-time stats as features; random rather than temporal splits; post-kickoff market data; comparing a Thursday model against closing odds that embed team news; duplicated season files silently double-counted; calibration fitted on the test fold (q22, q21).
+- A 2024 systematic review tabulates soccer DNNs at "99%" and GBT at "89.6%" accuracy without comment; against a ceiling of 52–56% these are unexamined claims (q22 — **partial**: primary studies not traced).
+
+## 6. Building and running it
+
+### 6.1 Data sources (fetched Sep 2026)
+- **Free, stable:** football-data.co.uk CSVs 1993/94–2026/27 with results, shots, cards, opening and closing odds (no xG, no lineups); football-data.org free tier (fixtures/tables, 10 calls/min; lineups need €29/mo Deep Data); ClubElo daily CSV API (q12, q18).
+- **Free but fragile/ToS-limited:** Understat (scrape-only xG back to 2014/15); FBref (xG removed Jan 2026, Sports Reference forbids building tools from scraped data); StatsBomb open data (non-commercial, 2015/16 PL only) (q12).
+- **Paid:** API-Football $19–39/mo (lineups, injuries, xG, odds); Sportmonks €29/mo Starter (5 leagues), xG add-on €24, expected lineups €199; The Odds API free 500 credits/mo, $30 for 20K; Opta/StatsBomb commercial are quote-only ($500–1,000+/mo estimates) (q12).
+
+### 6.2 Libraries
+- **penaltyblog** (Python, v1.12.2, 2026-09-13) is the only actively maintained full-stack option: Poisson, Dixon-Coles, bivariate, negative binomial, Bayesian/hierarchical goal models, Elo, pi-ratings, de-vig tools, backtesting and scrapers; cannot take per-match covariates (q18).
+- **soccerdata** (v1.9.1) for data access; **footBayes** (R, CRAN 2.0.0) for Stan-backed Bayesian models; goalmodel/regista (R, GitHub-only). Avoid footballdata (2017), worldfootballR (archived 2025), socceraction (event data, not prediction) (q18).
+
+### 6.3 The weekend build
+- Option A: penaltyblog Dixon-Coles on 3–5 seasons of football-data.co.uk with ξ ≈ 0.0018/day; Option B: ClubElo CSV + multinomial logit on rating difference (<100 lines). Both benchmark near the market (q19).
+- Outage-resilient minimum: fixture list (home, away, kickoff) + historical goals and dates, available from three independent free sources; cache weekly; keep last week's ratings frozen as fallback; treat xG, lineups and odds as optional enrichments (q19).
+
+### 6.4 Cadence, lead time, drift
+- Lead time costs little: opening-line Brier 0.5747 vs closing 0.5734 over 5,286 matches; a goals model cannot predict line movement (r = −0.02). Publish Tue/Wed after ingest, refresh Fri after press conferences, optional T-60 lineup run; timestamp every version to score skill by lead time (q13).
+- Refit ratings every matchday (seconds); re-tune ξ / calibration once per season. Monitor the *paired* model-minus-market RPS per match with CUSUM; a sustained 0.01 RPS decline takes ~100+ matches to detect, so also watch data-quality checks, which cause silent degradation more often than concept drift (q15).
+
+### 6.5 Promoted teams, cold start, postponements
+- Options: carry Championship-earned Elo (ClubElo does), assign relegated-team average (avoids rating inflation), or seed from Transfermarkt value; widen uncertainty for the first 6–10 rounds (q16 — **partial**: no source quantifies stabilisation time).
+- 41.4% of PL fixtures 2021/22–2025/26 moved from their published date; key everything on fixture ID and actual kickoff datetime, re-pull fixtures before every run, and let date-based decay handle games in hand (q16).
+
+## 7. Product surface
+
+### 7.1 How incumbents present forecasts
+- Probability-first (Opta supercomputer: three percentages from 10,000 sims, minimal methodology disclosure); scoreline-first pundit games (BBC Sutton, Sky Super 6); hybrid (Forebet: 1X2 % plus Poisson correct score). The most trusted product (FiveThirtyEight SPI) was the most transparent: probabilities, projected score, xG, top-10 scorelines, public methodology and calibration pages (q27 — **partial**: no football-specific engagement study).
+- Election-forecast experiments show users over-read probabilities ("90%" = certainty) and disengage; percentages plus a most-likely scoreline satisfy both audiences (q27).
+
+### 7.2 Deriving the displayed pick; the draw problem
+- Argmax maximises expected accuracy but a model "correctly predicted only 2 draws out of 1,784"; show the draw probability alongside the pick so users see when it is high (q28).
+- Displayed scoreline: mode of the score matrix (often 1-1 / 1-0) vs rounded expected goals; Forebet shows both the 1X2 pick and a separate most-probable score (q28).
+- User-facing scoring: Super 6 (5 exact / 2 result), Superbru (3 exact / 1.5 close / 1 result); for a probabilistic score, Brier is the most explainable (0 perfect, 0.667 worst 3-way) (q28).
+
+### 7.3 Defining a matchweek
+- The PL schedules 38 numbered rounds (33 weekend + 5 midweek); premierleague.com labels each fixture with a matchweek that survives postponement; FPL gameweeks diverge after rescheduling; Super 6 curates six fixtures and voids postponed ones (q30 — **partial**).
+- 2026/27: 21 Aug 2026 – 30 May 2027, merged Sep/Oct break 21 Sep–6 Oct, Nov 9–17, Mar 22–30; midweek MW13, 18, 25, 29 confirmed. Key each fixture to (season, matchweek, fixture id); score rescheduled games in their original matchweek; no official public API, but football-data.org exposes `matchday` (q30).
+
+### 7.4 Legal
+- UK: a free-to-enter prediction app, with or without prizes, is a prize competition needing no UKGC licence (Gambling Act 2005 s.11); paid entry converts it to pool betting unless an equally prominent free route exists; CAP Code section 16 applies to affiliate content and rule 16.3.12 bans "strong appeal" to under-18s (e.g. top-flight footballers) (q29).
+- US: free-to-play falls under state sweepstakes law (registration/bonding above thresholds in FL, NY, RI); paid pick'em is treated as DFS and banned in several states. Google Play prohibits unapproved apps that "direct users to" gambling services, the main risk for affiliate links (q29). See Conflicts: *Are free prediction games legal everywhere in the US?*
+
+## 8. Synthesis: recommended architecture for the app
+- **Model:** time-weighted Dixon-Coles (independent Poisson is equivalent for 1X2) on 3–5 seasons, ξ ≈ 0.0018/day, league-level time-varying home advantage, promoted teams seeded from relegated-team average or Championship data (q05, q07, q08, q09, q16, q19).
+- **Optional upgrade path:** (a) blend with de-vigged closing odds via The Odds API when licensed, expected to close most of the gap to the market (q17, q25); (b) Bayesian state-space / hierarchical model for early-season shrinkage and time-varying home advantage (q05, q26); (c) lineup or squad-value covariates for ~1–2% (q10).
+- **Skip:** deep learning, LLM forecasters, xG-only ratings as a replacement for goals (q06, q23).
+- **Evaluation:** walk-forward by matchweek over ≥5 seasons; RPS + log loss + Brier + reliability plots vs climatology and closing-odds baselines; paired per-match differences with bootstrap CIs (q11, q21, q22).
+- **Ops:** matchday refit, Tue/Wed publish + Fri refresh, fixture-ID keyed storage, three-source data redundancy, CUSUM on paired score vs market (q13, q15, q16, q19).
+- **Surface:** three probabilities + derived pick with its probability + most-likely score; report Brier and hit rate; matchweek keyed to official round; free-to-enter with no affiliate links unless the legal review is done (q27, q28, q29, q30).
+
+## Conflicts & tensions
+
+- **Dixon-Coles vs Elo ordering** — penaltyblog's Eredivisie backtest and Hubáček/Ley put time-weighted Poisson/DC ahead of Elo by 0.005–0.013 RPS (q05, q14) vs. footballproofai's 2022–2026 PL walk-forward putting Elo→multinomial logit ahead of sequential DC by 0.010 Brier (q15, q19). Why it matters: it decides the weekend build. Resolution: different leagues, windows and DC tunings (decay, promoted-team handling); the mattyorkilous review's point that feature engineering swings RPS ~0.08 vs ~0.01 for model class suggests either is fine if tuned. Settle by running both on the same PL walk-forward with paired tests.
+- **RPS vs log (ignorance) score** — Constantinou & Fenton 2012 (ordered outcomes need a distance-sensitive score; RPS is the challenge standard) (q11) vs. Wheatcroft 2021 (only local scores use the available information; ignorance selects the better forecaster more often on 6,460 PL matches) (q11, q28). Why it matters: which metric the app optimises and reports. Resolution: report both; the literature has not converged.
+- **Does low-score dependence exist?** — Own per-season ρ fits are noisy (−0.16 to +0.06) and change 1X2 RPS ≤ 0.0002; Ley et al. find bivariate covariance ≈ 0 (q07) vs. a 2026 Bayesian bivariate conditional Poisson study finding φ = −0.107 with a ~13-point ELPD gain (q07). Why it matters: whether to keep ρ. Resolution: the dependence is real for scoreline reproduction but irrelevant for 1X2; keep it only for correct-score outputs.
+- **How big is the post-COVID home effect?** — Bryson et al. find the closed-door effect "not statistically significant" after matching; Benz & Lopez find heterogeneous league effects (q09) vs. raw PL data showing a 37.9% home-win floor in 2020/21 and a second dip to 40.8% in 2024/25, and a Bradley-Terry paper's η = 0.85 for 2023 that raw data contradict (q09). Why it matters: whether home advantage can be a constant. Resolution: the data favour a time-varying league-level parameter; the causal question about crowds is separate from the forecasting question.
+- **Odds-informed models: profitable yet less accurate?** — Egidi et al. 2018 and Wilkens 2026 report positive simulated returns (q25, q24) vs. their own metrics showing the market better calibrated / more accurate (EPL 0.435 vs 0.452; Brier 0.63 vs 0.59) and Koopman & Lit finding no results-only model beats the bookmaker (q17, q25). Why it matters: whether "value" exists for a betting-adjacent product. Resolution: profit in these studies comes from decorrelation and price dispersion, not superior forecasts; treat reported ROI as unreliable without a closing-line test.
+- **Shin vs power/multiplicative de-vigging** — Štrumbelj 2014: Shin beats normalisation on football RPS (q17, q24) vs. Berk 2024 and a 2026 EMH paper: power/multiplicative as good or better in low-margin markets (q17). Why it matters: a one-line implementation choice. Resolution: margins have fallen since Štrumbelj's data; use power method, and compare on your own odds feed.
+- **Does lead time / team news matter?** — Opening vs closing Brier differs by ~0.2% and a goals model cannot predict line movement (q13) vs. Arntzen & Hvattum's significant lineup gain and affiliate claims of 5–15% odds swings (q10, q13). Why it matters: whether a T-60 lineup refresh is worth building. Resolution: the average effect is small, the tail effect (multiple key absences, rotation) is real; timestamp forecasts and measure it.
+- **Feature engineering matters more than model class — or nothing matters much?** — mattyorkilous/pena.lt/y: a single feature change moved RPS 0.08 vs 0.01 for model class (q14, q19) vs. Fischer & Heuer: "the choice of features and model has only a minor influence" (q05, q10). Why it matters: where to spend effort. Resolution: both agree model class is minor; the 0.08 swing likely reflects a badly specified baseline feature, so expect small gains from good ratings and large losses from bad ones.
+- **What is the draw rate?** — The question premise "~23%" and computed 2021–26 values 21.6–27.4% (q04) vs. Statista's range 18.7% (2018/19) to ~30% (early 2024/25) (q28). Why it matters: draw handling in the pick logic. Resolution: seasonal variation is real; the early-2024/25 figure is a mid-season snapshot.
+- **"Bookmakers are ~54% accurate"** — generic multi-league figure (q03, 2017 challenge 51.9%) vs. PL favourite accuracy swinging 49.5–60.0% by season (q03, q20). Why it matters: a single-season hit rate is a poor KPI. Resolution: report per-season with baselines.
+- **Hubáček 2019 as football evidence** — widely cited as beating the football market (q20) vs. it being an NBA study with decorrelation-based profit (q20). Why it matters: it underpins many "ML beats bookies" claims.
+- **LLM competitiveness** — an unreadable OSF preprint snippet claims GPT-4 achieves "competitive accuracy" (q23) vs. arXiv 2608.05030 showing the LLM below the Dixon-Coles baseline on EPL 2025/26 and World Cup arenas at parity with consensus (q23).
+- **Data pricing and availability** — third-party summaries of The Odds API ($29 Pro, NBA/MLB-only free), a €34/mo Sportmonks PL plan, and FBref as free xG (q12) vs. vendor pages fetched 2026-09-22 (free 500 credits all sports; no PL-only plan; xG removed Jan 2026). Resolution: vendor pages used.
+- **Are free prediction games legal everywhere in the US?** — Wikipedia: "legal in all fifty states" (q29) vs. sweepstakes-law sources requiring registration/bonding in FL/NY/RI and strict-skill states (q29). Resolution: do not rely on the blanket claim.
+- **2026/27 opening date** — Tottenham key-dates page (Sat 22 Aug) vs. premierleague.com/Wikipedia (Fri 21 Aug) (q30). Minor; premierleague.com is authoritative.
+
+## Gaps / open questions
+
+- **q06 (partial)** — No Premier-League-level peer-reviewed RPS/log-loss comparison of xG-based vs goals-based ratings; only a hobby replication with a CI crossing zero. Tried: Wunderlich/Memmert, Understat-based studies, blog comparisons.
+- **q10 (partial)** — Lineup/injury feature value only at abstract level (Arntzen & Hvattum, Peeters behind 403s); no PL study quantifying injuries/suspensions in RPS terms.
+- **q16 (partial)** — No source quantifies how many matches until a promoted team's rating stabilises; ClubElo promotion handling undocumented; the 6–10 round figure is inferred from practitioner exclusions.
+- **q21 (partial)** — No published "N matches needed" for RPS comparisons; sample sizes are an own paired-t power calculation from football-data.co.uk RPS SDs.
+- **q22 (partial)** — Leakage examples mostly from search snippets (Medium/Kaggle 403); the "99%" and "89.6%" claims in the 2024 review were not traced to primary studies; no source quantifies inflation from xG-with-future-info or table-position features.
+- **q26 (partial)** — No head-to-head Bayesian hierarchical vs maximum-likelihood Dixon-Coles out-of-sample skill study found.
+- **q27 (partial)** — No football-specific UX/engagement/trust study for match probabilities; evidence borrowed from betting-odds perception and election forecasts.
+- **q30 (partial)** — Fifth midweek matchweek for 2025/26 and 2026/27 unconfirmed; Pulselive gameweek field is community-documented only; "postponed fixtures keep their matchweek label" is model-knowledge.
+- **Structural gaps:** (1) FiveThirtyEight methodology and calibration pages are dead and the Wayback Machine was unreachable, so SPI details rest on the data README and secondary posts. (2) The 2023 Soccer Prediction Challenge leaderboard is image-only; its RPS values are as reported by Yeung et al. (3) Understat has no discoverable terms of use. (4) Maintenance-cost comparison of GBT vs DC pipelines is model-knowledge. (5) No study of forecast-skill decay per day of lead time exists for the PL. (6) Baboota & Kaur and Koopman & Lit numbers were read from snippets/PDF without a stable URL. (7) All LLM benchmarks found are World Cup 2026; none covers a full domestic season.
+
+
+---
+
+# Part 2 — Personas
+
+### Dr. Helena Marsh — Sports statistician; publishes on football outcome models (Poisson/Dixon-Coles, Elo, xG-based ratings)  
+*id: `domain-expert`*
+
+**Background.** Fifteen years modelling football outcomes in academia and for a data provider. Has implemented Maher, Dixon-Coles, bivariate Poisson, and Bradley-Terry/Elo variants against decades of English league data. Reviews sports analytics papers and knows which published accuracy claims survive replication.
+
+**Stake.** Wants the app to be built on a model whose assumptions are sound and whose evaluation is honest, so the field is not embarrassed by another over-fitted 'AI beats bookmakers' claim.
+
+**Biases.** Prefers interpretable parametric models; suspicious of deep learning on tiny datasets; overestimates how much a general reader cares about likelihood theory; dismisses simple heuristics that work 'well enough'.
+
+### Tomasz Nowak — ML engineer who runs a live football prediction service (weekly retrain, public API, ~40k users)  
+*id: `practitioner`*
+
+**Background.** Built and operates a prediction pipeline for European leagues: data ingestion from a commercial API, feature store, weekly gradient-boosted retraining, and a Brier-score dashboard. Has been burned by fixture postponements, data-provider schema changes, and a model that silently degraded after a season rollover.
+
+**Stake.** Needs a model that is cheap to run, robust to missing data at Friday-evening prediction time, and whose performance can be monitored so he notices decay before users do.
+
+**Biases.** Anchored to gradient boosting and his own stack; assumes everyone has a paid data feed; underweights model elegance in favour of operability; suspicious of academic models that were never run in production.
+
+### Rachel Okafor — Former quant at a sports betting syndicate; now writes critically about sports prediction products  
+*id: `skeptic`*
+
+**Background.** Spent years trying to beat closing lines on the Premier League with far more data and compute than any hobby project. Has audited dozens of 'record-breaking' tipster and AI prediction claims and found nearly all were selection bias, leakage, or tiny samples.
+
+**Stake.** Wants any accuracy claim the app makes to be defensible against the trivial baseline of copying bookmaker odds, and wants the builder to understand what they are actually competing against.
+
+**Biases.** Over-indexes on the efficient-market view; may dismiss modelling as pointless when the app's goal is not to beat the market but to give users a defensible forecast; treats every accuracy claim as fraudulent until proven otherwise.
+
+### Dev Patel — Full-stack developer building a Premier League matchweek prediction app as a side project; no stats background  
+*id: `newcomer`*
+
+**Background.** Comfortable with APIs, databases, and shipping web apps; has never trained a model beyond a tutorial. Has read headlines about 'AI predicting football with 80% accuracy' and is unsure what a realistic target is or where to get data.
+
+**Stake.** Needs to pick one approach to build in a few weekends, know what data to fetch, and know whether the result will look credible to users who follow the league closely.
+
+**Biases.** Anchors on popular-press accuracy numbers; assumes 'more AI' means better; conflates predicting the winner, the score, and the probability; assumes free data is good enough.
+
+### Ingrid Sørensen — Operational weather forecaster and verification specialist (probabilistic ensemble forecasting)  
+*id: `adjacent-expert`*
+
+**Background.** Runs verification for a national meteorological service: reliability diagrams, Brier and ranked probability scores, ensemble calibration, and forecast-vs-persistence baselines. Has consulted on applying forecast-verification practice to other domains.
+
+**Stake.** Sees football outcome prediction as a low-signal probabilistic forecasting problem and wants to know whether the football field has adopted proper scoring rules, ensembling, and calibration, or is still reporting hit-rates.
+
+**Biases.** May force weather analogies that do not hold (football has no physics-based model); over-values calibration relative to what an app user perceives as 'getting it right'.
+
+### Marcus Bell — Product manager for a consumer sports-prediction / tipping app in the UK  
+*id: `product-owner`*
+
+**Background.** Has shipped prediction features to hundreds of thousands of users and watched what they actually engage with and complain about. Has dealt with UK gambling-advertising rules, affiliate relationships with bookmakers, and users who judge the app on 'how many did you get right this week'.
+
+**Stake.** Needs the model output to be presentable, explainable, and judged fairly by users who only remember the misses; also needs to know the legal line between a prediction app and a betting product.
+
+**Biases.** Optimises for perceived accuracy and engagement over statistical correctness; assumes users want a single pick per match rather than probabilities; underestimates modelling difficulty.
+
+
+---
+
+# Part 3 — Full Q&A appendix
+
+Every question with its answer, originating persona(s), retrieval method, status and sources. Where an answer says "computed" or "own computation", the number came from this research run's analysis of football-data.co.uk CSVs, not from a published source.
+
+## q01 — What does 'predicting a match' actually mean in practice: the 1X2 winner, the exact scoreline, or outcome probabilities, and which of these should a matchweek prediction app produce and show?
+
+**Personas:** newcomer · **Retrieval:** mixed · **Status:** answered
+
+In the football-forecasting literature and in practical tooling, 'predicting a match' means producing a probability distribution, not a single pick: the canonical object is the 1X2 vector (P(home win), P(draw), P(away win)), and goals models go one level deeper by producing a full scoreline probability matrix from which 1X2 and every other market are derived. penaltyblog's documentation is explicit: every goals model's .predict() returns a FootballProbabilityGrid holding probabilities for all scorelines 0..15, and 1X2, BTTS, totals, Asian handicap, double chance etc. are all read off the same grid so they never conflict. Public-facing products do the same: Opta's Premier League predictions show three percentages per fixture (e.g. 'Man City 73.3% to beat Sunderland', 'most likely draw at 24.7%') from 10,000 simulations, and the FiveThirtyEight SPI data files carried prob1/probtie/prob2 plus projected scores per match. The academic benchmarks (2017 Soccer Prediction Challenge, Constantinou & Fenton 2012) evaluate the probability vector with RPS, and only secondarily report accuracy of the argmax pick. A single 'winner' pick is the argmax of the 1X2 vector and hides the fact that the favourite is typically only ~52-56% likely (mean favourite probability from closing odds in the PL 2021-26 was 0.52-0.56, computed from football-data.co.uk); exact-score picks are rarely right (the single most likely scoreline is usually only ~8-12% likely). Recommendation supported by these sources: an app should compute the score grid (Poisson/Dixon-Coles) or at least a calibrated 1X2 vector, show the three probabilities (and optionally most-likely score and expected goals), and display the argmax pick only as a derived label with its probability attached.
+
+> **Notes / caveats:** The '~8-12% for the most likely scoreline' figure is model-knowledge (typical Poisson output for PL goal rates), not retrieved. Mean-favourite-probability figures were computed by us from football-data.co.uk closing-odds CSVs (see q03).
+
+**Sources:**
+
+- <https://penaltyblog.readthedocs.io/en/latest/models/football_prob_grid.html>
+- <https://docs.pena.lt/y/models/dixon_coles.html>
+- <https://theanalyst.com/articles/premier-league-match-predictions>
+- <https://github.com/fivethirtyeight/data/blob/master/soccer-spi/README.md>
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <https://www.degruyterbrill.com/document/doi/10.1515/1559-0410.1418/html>
+
+## q02 — In plain terms, what is a Poisson goals model and what is an Elo/power rating, how do they differ, and how do they relate to the 'power ratings' shown on sites like the former FiveThirtyEight SPI?
+
+**Personas:** newcomer · **Retrieval:** mixed · **Status:** answered
+
+A Poisson goals model treats each team's goals in a match as a Poisson count whose mean is (team attack strength) x (opponent defence weakness) x (home advantage); multiplying the two Poisson distributions gives a probability for every scoreline, and summing cells gives 1X2. Dixon & Coles (1997) kept this structure but added a correction factor tau for the 0-0, 1-0, 0-1 and 1-1 cells (because independent Poissons under-predict draws/low scores) and an exponential time-decay so recent matches weigh more; that is the model implemented in penaltyblog and opisthokonta's goalmodel. An Elo rating is a single strength number per team updated after each result: Rn = Ro + K*G*(W - We), where We = 1/(10^(-dr/400) + 1) is the expected score from the rating difference dr (with ~100 points added for home advantage in the World Football Elo system), K sets how fast ratings move (20-60 by match importance) and G scales for margin of victory (1 for <=1 goal, 1.5 for 2, (11+N)/8 for N>=3). ClubElo applies the same idea to clubs with a home-field-advantage term (its tables show HFA values of roughly 30-85 points) and converts rating gaps to an 'Elo %' win expectancy. The key difference: Elo directly outputs a two-sided expected score and needs an extra step (e.g. an empirical draw curve or a mapping to expected goals) to produce 1X2 or scorelines, whereas a Poisson model natively produces the whole score distribution but needs more parameters (2 per team plus home advantage and rho). FiveThirtyEight's SPI was a hybrid: each club had an offensive rating (goals it would score vs an average team on neutral ground) and a defensive rating (goals it would concede), updated from actual goals, shot-based xG and non-shot xG and weighted by opponent quality and match importance; the headline SPI number was the expected share of points against an average team, and match probabilities were generated from the two projected goal totals, i.e. a Poisson-style goals layer sitting on top of a rating layer. So 'power ratings' on such sites are Elo-like strength summaries, but the probabilities shown are derived through a goals model. A later independent evaluation of SPI (36,335 matches, 18 leagues, 2016/17-2022/23) found it directionally sound but miscalibrated (events it priced at 50% happened ~41% of the time) and unable to beat Pinnacle closing odds.
+
+> **Notes / caveats:** FiveThirtyEight's own methodology page now redirects to abcnews.com and web.archive.org could not be fetched, so the SPI mechanics (offensive/defensive ratings, xG + non-shot xG, points-share definition) come from the ESPN explainer, the 538 data README and model knowledge. ClubElo's System page rendered as tables rather than formulas; the K/G/We formulas quoted are from the World Football Elo (national team) system and ClubElo uses its own variant of the same scheme.
+
+**Sources:**
+
+- <https://dashee87.github.io/football/python/predicting-football-results-with-statistical-modelling-dixon-coles-and-time-weighting/>
+- <https://statsultra.com/dixon-coles-model/>
+- <https://docs.pena.lt/y/models/dixon_coles.html>
+- <https://en.wikipedia.org/wiki/World_Football_Elo_Ratings>
+- <http://clubelo.com/System>
+- <https://www.espn.com/soccer/story/_/id/37367780/soccer-power-index-explained>
+- <https://github.com/fivethirtyeight/data/blob/master/soccer-spi/README.md>
+- <https://www.pythonfootball.com/p/how-good-really-was-fivethirtyeights>
+
+## q03 — What is a realistic 1X2 accuracy for Premier League predictions, and what do the trivial baselines achieve over recent seasons (always home win, pick the bookmaker favourite, pick the higher-ranked team)?
+
+**Personas:** newcomer, skeptic · **Retrieval:** mixed · **Status:** answered
+
+Computed directly from football-data.co.uk E0.csv files (380 matches per season): 2021-22 H/D/A = 42.9% / 23.2% / 33.9%; 2022-23 = 48.4% / 22.9% / 28.7%; 2023-24 = 46.1% / 21.6% / 32.4%; 2024-25 = 40.8% / 24.5% / 34.7%; 2025-26 = 42.6% / 27.4% / 30.0%. So 'always home win' scores 41-48% (five-season mean ~44%), and 'always draw' only 22-27%. Independent corroboration: Smarkets reports 48.42% home wins in 2022-23 and a long-run PL average of 46.2% home / 27.5% draw / 26.3% away, and Sky Sports reported the 2025-26 home-win rate at 42% (fifth-lowest in PL history) vs a 65% peak in 1895. 'Pick the bookmaker favourite' (lowest market-average closing 1X2 odds, football-data AvgC columns) was correct 59.2% (2021-22), 55.5% (2022-23), 60.0% (2023-24), 55.5% (2024-25) and 49.5% (2025-26), i.e. roughly 50-60% with a five-season mean of about 56%; the favourite was the home side ~61-64% of the time. The corresponding market RPS was 0.189, 0.198, 0.181, 0.196 and 0.205 (log loss 0.90-1.01), versus 0.227-0.235 for a model that only knows the season's base rates. Literature benchmarks agree: in the 2017 Soccer Prediction Challenge the bookmaker-odds baseline scored 51.94% accuracy / RPS 0.2020 and the winning XGBoost model 52.43% / RPS 0.2063 across many leagues (Hubáček et al. 2019), Constantinou reports Bet365/Pinnacle at RPS 0.2012 for PL 2014-16, and a 2020 arXiv baseline paper puts bookmaker accuracy at ~54% for football. 'Pick the higher-ranked team' was not found as a published PL figure; since the odds favourite is almost always the higher-rated team, expect it to land slightly below the favourite baseline (roughly 50-55%). Bottom line: a realistic honest 1X2 accuracy for the PL is 50-60% depending on season, and a model that matches the closing market (RPS ~0.19-0.20) is state of the art; anything claiming much above 60% over a full season is suspect.
+
+> **Notes / caveats:** Per-season percentages and favourite accuracy were computed by us from the football-data.co.uk CSVs for 2122-2526 (rows with a valid FTR; favourite = lowest AvgC odds, falling back to B365 opening odds where closing columns were missing, which affected part of 2025-26). Goals-per-match from the CSVs (2.82, 2.85, 3.28, 2.93, 2.75) match Wikipedia's season totals, which validates the files. Conflict: generic sources quote bookmaker accuracy ~54% across football, but the PL range is wider (49.5% in 2025-26 to 60.0% in 2023-24). No published 'higher-ranked team' baseline was found for these seasons.
+
+**Sources:**
+
+- <https://www.football-data.co.uk/mmz4281/2425/E0.csv>
+- <https://www.football-data.co.uk/englandm.php>
+- <https://help.smarkets.com/hc/en-gb/articles/115000647291-Why-you-should-consider-home-advantage-for-football-trading>
+- <https://www.skysports.com/football/news/11095/13511444/home-advantage-is-on-the-wane-in-the-premier-league-between-the-lines>
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <https://arxiv.org/pdf/2012.04380>
+- <http://www.constantinou.info/downloads/papers/pi-ratings.pdf>
+- <https://en.wikipedia.org/wiki/2024%E2%80%9325_Premier_League>
+
+## q04 — How much irreducible randomness is there in a Premier League match: what is the draw rate, how variable are goals, and what does that imply about the ceiling on predictability?
+
+**Personas:** skeptic, newcomer · **Retrieval:** mixed · **Status:** answered
+
+Draw rate: 21.6%-27.4% of PL matches in 2021-22 to 2025-26 (22-24% in four seasons, 27.4% in 2025-26), with 3-7% of matches finishing 0-0 (computed from football-data.co.uk); the long-run PL draw share quoted by Smarkets is 27.5%. Goals are low and noisy: total goals averaged 2.75-3.28 per match with variance 2.5-3.2 (roughly Poisson: home goals mean 1.5-1.8 / variance 1.4-2.0, away 1.2-1.5 / variance 1.2-1.6), so a one-goal swing, which decides most matches, is inside one standard deviation of the goals process. Cross-sport research puts football at the random end: Ben-Naim, Vazquez & Redner (JQAS 2006) fit an 'upset probability' q that the worse team wins and find soccer q≈0.452 (baseball 0.441; basketball and American football ≈0.35), and Aoki, Assunção & Vaz de Melo (KDD 2017, 198 leagues / 1,503 seasons) conclude luck is 'substantially present even in the most competitive championships', which 'partially explains why sophisticated and complex feature-based models hardly beat simple models'; they cite Blastland & Dilnot that bettors' favourites win about half the time in soccer vs 60% in baseball and 70% in NFL/NBA. StatsBomb's log-loss analysis of bookmaker odds (2009/10-2013/14, per-match log loss 0.58-0.64) found the PL is actually among Europe's more predictable leagues, so this is a property of the sport, not the league. The practical ceiling: even the closing market, the best available forecaster, only picks the winner 50-60% of the time in the PL (RPS ~0.18-0.21), the best challenge-winning ML models sit at 52-56% accuracy / RPS 0.19-0.21, and reviews note published PL models 'rarely exceed 60%'. Because the draw is ~23-27% likely yet almost never the most probable outcome, the argmax pick essentially never predicts a draw, which alone caps 1X2 accuracy near 73-78% even for a perfect two-way predictor; combined with an average favourite probability of only 0.52-0.56, a well-calibrated model's expected accuracy is mid-50s%.
+
+> **Notes / caveats:** Draw/goal statistics computed by us from football-data.co.uk CSVs. No single paper states a formal '50-55% ceiling'; that figure is an inference from the bookmaker baseline (49.5-60% in the PL, 51.9% multi-league in the 2017 challenge) and the Aoki 'half the time' remark. Aoki et al. do not rank soccer vs the other three sports in the abstract; their soccer-specific numbers come from citing Ben-Naim (q≈0.45).
+
+**Sources:**
+
+- <https://www.degruyterbrill.com/document/doi/10.2202/1559-0410.1034/html>
+- <http://physics.bu.edu/~redner/pubs/pdf/jqas.pdf>
+- <https://arxiv.org/abs/1706.02447>
+- <https://dl.acm.org/doi/10.1145/3097983.3098045>
+- <https://blogarchive.statsbomb.com/articles/soccer/the-most-unpredictable-league-in-the-world/>
+- <https://www.football-data.co.uk/englandm.php>
+- <https://help.smarkets.com/hc/en-gb/articles/115000647291-Why-you-should-consider-home-advantage-for-football-trading>
+- <https://thexgfootballclub.substack.com/p/which-machine-learning-models-perform>
+- <https://textinvisible.io/hardest-major-league/>
+
+## q05 — What is the current published state of the art for Premier League / top-league outcome models, and has anything meaningfully beaten time-weighted Dixon-Coles or bivariate Poisson on out-of-sample RPS or log loss?
+
+**Personas:** domain-expert · **Retrieval:** web-search · **Status:** answered
+
+The 2017 Soccer Prediction Challenge (results-only data, 52 leagues) was won by Hubáček, Šourek & Železný's XGBoost model built on hand-crafted features incl. pi-ratings and PageRank, RPS 0.2063 / accuracy 52.4% on the test set; Fischer & Heuer (arXiv 2408.08331) note that all published entries (Berrar, Hubáček, Constantinou, Tsokos) sat in a narrow RPS band 0.2054-0.2087 (accuracy 51.5-53.9%), and Constantinou's pi-ratings+Bayesian-network reported RPS ~0.203 on EPL matches. In Hubáček et al.'s MathSport 2019 'experimental review' a time-weighted double Poisson (alpha=0.0019/day) beat Elo, pi-ratings and PageRank (RPS 0.2082 vs 0.2088, 0.2092, 0.2128); Ley, Van de Wiele & Van Eetvelde (2019) found bivariate Poisson (390-day half period) RPS 0.1953 vs independent Poisson 0.1954 vs Thurstone-Mosteller/Bradley-Terry ~0.1985 on EPL 2008/09-2017/18 (rounds 6-38), with the bivariate covariance 'close to zero'; penaltyblog's 2025 Eredivisie backtest gives the same ordering (Dixon-Coles 0.1914, Poisson 0.1915, bivariate 0.1916, pi-ratings 0.1991, Elo 0.2042). Machine learning has not clearly beaten these: Fischer & Heuer (5 top leagues) found neural nets and Poisson essentially tied (goal-difference cross-entropy 1.902 vs 1.905-1.907) and 'the choice of features and model has only a minor influence'; in the 2023 Soccer Prediction Challenge the best RPS (~0.206) came from a bookmaker-odds-based entry while Yeung et al.'s deep-learning model scored 0.2195 (6.4% behind) and pi-ratings were the most useful GBT features. The strongest published claim of beating weighted-likelihood Dixon-Coles is the 2025 JRSS-C Bayesian state-space model (time-varying attack/defence and home advantage): cumulative RPS 17.55 over 14 EPL test seasons (2010/11-2023/24) vs 20.71 for Koopman-Lit score-driven and 22.22 for Dixon-Coles weighted likelihood (roughly 0.033 vs 0.042 RPS per match-season-average as reported by the fetch; the authors attribute part of the gain to time-varying home advantage), and the footBayes 'Bayesian weighted discrete-time dynamic' model (JRSS-C 2026, 5 seasons EPL/Bundesliga/La Liga) claims better predictive performance than other dynamic models without published RPS. Net: differences among well-tuned goals-based models are ~0.001-0.005 RPS, bookmaker consensus remains the benchmark nobody in these challenges beats, and dynamic Bayesian state-space models are the only class with a credible published out-of-sample edge over time-weighted DC on the EPL.
+
+> **Notes / caveats:** 2023 SPC leaderboard is published as images; the 0.2063 'winner' RPS is as reported by Yeung et al. and could not be verified directly. The JRSS-C cumulative RPS values are as extracted from the article page; per-match normalisation not stated. Constantinou RPS 0.203 figure comes from a search snippet citing Constantinou (2018).
+
+**Sources:**
+
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <http://ida.felk.cvut.cz/zelezny/pubs/MathSport2019a.pdf>
+- <https://arxiv.org/abs/1705.09575>
+- <https://arxiv.org/abs/2408.08331>
+- <https://arxiv.org/html/2309.14807>
+- <https://academic.oup.com/jrsssc/article/74/3/717/7929974>
+- <https://arxiv.org/abs/2508.05891>
+- <https://pena.lt/y/2025/04/14/pi-ratings-the-smarter-way-to-rank-football-teams/>
+- <https://www.eecs.qmul.ac.uk/~norman/papers/pi-ratings.pdf>
+- <https://sites.google.com/view/2023soccerpredictionchallenge/results>
+
+## q06 — How much do expected-goals (xG) based team ratings improve out-of-sample match forecasts over goals-based ratings, and does the improvement hold at Premier League level?
+
+**Personas:** domain-expert · **Retrieval:** web-search · **Status:** partial
+
+Evidence that xG is a better *descriptor* of team strength is solid: Mead, O'Hare & McMenemy (PLOS ONE 2023) find their xG model's correlation with future goal ratio is r=0.574 vs 0.47 for goals and 0.456 for shots, and xG 'is bettered in only one evaluation metric for one competition'. Evidence that this translates into materially better 1X2 forecasts is much weaker. Wilkens (2026, Bundesliga 2014/15-2024/25) converts recent xG via a Skellam model with isotonic calibration and finds bookmaker odds remain better calibrated, though the xG model captures some signal not in prices (simulated ROI ~10% at average odds, ~15% at best odds, concentrated in home-win bets and unstable across seasons). The only direct xG-Dixon-Coles vs goals-Dixon-Coles comparison found (a public replication on 2,690 matches) measured an RPS change of +0.00026 with a 95% bootstrap CI of [-0.0035, +0.0039] (55% of resamples favouring xG), with the xG model *worse* on log loss and Brier despite slightly more correct winners; its conclusion was that 'the closing line has already priced expected goals'. FiveThirtyEight's SPI blended adjusted goals, shot-based xG and non-shot xG, but published no ablation showing the xG contribution. Fischer & Heuer (2024) more generally find feature choice has 'only a minor influence' on 5-league prediction quality. I could not find a Wunderlich & Memmert paper on xG-based forecasting (their PLOS ONE 2018 paper is an Elo variant driven by bookmaker odds; their 2021 EJSS review covers forecasting broadly), nor a peer-reviewed Premier-League-specific RPS comparison of xG vs goals ratings; the practical expectation from the above is a gain of at most a few thousandths of RPS, largest early in a season when goals are noisiest.
+
+> **Notes / caveats:** Tried searches for Wunderlich/Memmert + expected goals forecasting, Understat-based studies, and blog xG-Poisson vs goals-Poisson RPS comparisons; no Premier-League-level peer-reviewed RPS/log-loss comparison surfaced. The GitHub replication is a hobby project (league not stated in the fetch) and should be weighted accordingly.
+
+**Sources:**
+
+- <https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0282295>
+- <https://journals.sagepub.com/doi/10.1177/22150218261416681>
+- <https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5381388>
+- <https://github.com/AlejandroDelRosal/ml-portfolio/pull/6>
+- <https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0198668>
+- <https://onlinelibrary.wiley.com/doi/10.1080/17461391.2020.1793002>
+- <https://fromthebyline.substack.com/p/fivethirtyeight-is-dead-long-live>
+- <https://arxiv.org/abs/2408.08331>
+
+## q07 — Does the Dixon-Coles low-score dependence correction (adjusting 0-0, 1-0, 0-1, 1-1 probabilities) still matter in the modern higher-scoring Premier League, or is independent Poisson adequate?
+
+**Personas:** domain-expert · **Retrieval:** mixed · **Status:** answered
+
+Dixon & Coles' original English estimate was rho = -0.13, and it is still the default in penaltyblog/statsultra implementations; dashee87 re-estimated rho = -0.1285 on EPL 2017/18. Fitting the two-stage Dixon-Coles model myself on football-data.co.uk EPL results gives per-season in-sample MLEs of rho: 2015/16 -0.063, 2016/17 -0.066, 2017/18 -0.129, 2018/19 -0.041, 2019/20 -0.079, 2020/21 -0.045, 2021/22 -0.004, 2022/23 +0.060, 2023/24 -0.020, 2024/25 -0.034, 2025/26 -0.162, i.e. usually negative but noisy, with a log-likelihood gain over rho=0 of only 0.0-2.6 units per 380-match season. In a rolling out-of-sample test (previous season + season-to-date, xi=0.0018/day, weekly prediction windows after day 80) the 1X2 RPS difference between independent Poisson and Dixon-Coles was within ±0.0002 in every season 2019/20-2025/26 (e.g. 2025/26: 0.2085 vs 0.2083), so for match-outcome forecasting the correction is immaterial. Published work agrees on smallness but not on sign: Ley et al. (2019) found the bivariate-Poisson covariance 'close to zero' (RPS 0.1953 vs 0.1954 independent); opisthokonta's 2010/11-2016 backtest found DC best on outcome RPS but plain Poisson best on exact-scoreline log score in both EPL and Bundesliga; a 2026 Bayesian bivariate conditional Poisson study of 1,140 EPL matches (2018/19, 2020/21, 2023/24) estimates a negative home-to-away goal dependence phi = -0.107 [-0.147, -0.066] and an ELPD-LOO improvement of ~13 points over independent Poisson, mainly through better reproduction of goal correlation and home-loss proportions. Goals per game were 2.72 (2019/20), 3.28 (2023/24), 2.93 (2024/25) and 2.75 (2025/26); the higher-scoring seasons coincide with rho estimates nearest zero. Bottom line: keep rho if you also sell correct-score/BTTS/under-2.5 outputs, but for weekly 1X2 predictions independent Poisson with the same time weighting is adequate.
+
+> **Notes / caveats:** Per-season rho values and the rolling RPS test are my own computation on football-data.co.uk E0.csv files (independent Poisson attack/defence + home, rho by joint MLE; scipy L-BFGS-B), not a published source. A search snippet claimed an opisthokonta post showing rho 'jumping above 0 at the end of 2013-14'; I could not locate that post and the claim is unverified, though my 2022/23 fit (+0.06) shows sign flips do occur.
+
+**Sources:**
+
+- <https://dashee87.github.io/football/python/predicting-football-results-with-statistical-modelling-dixon-coles-and-time-weighting/>
+- <https://opisthokonta.net/?p=1548>
+- <https://arxiv.org/abs/1705.09575>
+- <https://arxiv.org/html/2608.07168>
+- <https://statsultra.com/dixon-coles-model/>
+- <https://docs.pena.lt/y/models/dixon_coles.html>
+- <https://www.football-data.co.uk/englandm.php>
+
+## q08 — What time-decay weighting or half-life is appropriate for estimating team strength, and how should a model handle the summer transfer window, manager changes, and newly promoted teams?
+
+**Personas:** domain-expert, practitioner · **Retrieval:** web-search · **Status:** answered
+
+Dixon & Coles' optimum was xi = 0.0065 per half-week = 0.00186/day, a half-life of about 373 days; opisthokonta's grid search on independent Poisson (predicting Jan 2007-2014) found xi = 0.0018/day England, 0.0023 Germany, 0.0019 Netherlands and France, and Ley et al. (2019) found an optimal 'half period' of 390 days for bivariate Poisson and 360 days for independent Poisson on the EPL (3 years for national teams), with Hubáček et al. adopting alpha = 0.0019/day. dashee87 found xi = 0 optimal when fitting a single EPL season and ~0.00325/day over five seasons, but with only a marginal likelihood gain, so anything in 0.0018-0.003/day is defensible and roughly 1-2 seasons of data matter. The 2025 JRSS-C Bayesian state-space model instead estimates a within-season forgetting factor of 0.988 per match and a between-season factor of 0.770, i.e. a large explicit reset at the summer window, with promoted teams given generic prior parameters; Sean Elvidge's Kalman/Ornstein-Uhlenbeck model likewise starts promoted teams with large uncertainty and mean-reverts established teams to division baselines. For Elo, ClubElo uses K = 20 (Csató 2023 confirms K = 20 with k = 400), a margin-of-victory multiplier, and a per-country home-field advantage that is nudged daily toward the observed home/away points split; common practice for promoted teams is to inherit the ratings of the relegated teams (or a division-average) rather than 1500. Summer transfer activity is best captured by an external covariate: Csató & Csurilla (2026) show one-season-lagged Transfermarkt squad values forecast UEFA matches as well as Elo (RPS x100 19.53 vs 19.73) and an equal-weight pool improves on Elo by ~0.3 RPS points, and FiveThirtyEight's SPI blended Transfermarkt values into pre-season ratings for the same reason. Manager changes should not get a large ad-hoc adjustment: Heuer et al. (PLOS ONE 2011, Bundesliga) find in-season dismissals have 'basically no effect' on subsequent performance, with only Tena & Forrest (2007) finding modest (mainly home) improvements; a blog claim that Elo needs 8-12 matches to absorb a manager change is uncited.
+
+> **Notes / caveats:** The ClubElo HFA-convergence description comes from a search snippet of clubelo.com/System; the page fetch returned only result tables. No peer-reviewed study quantifying a transfer-window uncertainty inflation for Dixon-Coles was found; the between-season forgetting factor from the JRSS-C paper is the closest published analogue.
+
+**Sources:**
+
+- <https://opisthokonta.net/?p=1013>
+- <https://arxiv.org/abs/1705.09575>
+- <https://dashee87.github.io/football/python/predicting-football-results-with-statistical-modelling-dixon-coles-and-time-weighting/>
+- <https://academic.oup.com/jrsssc/article/74/3/717/7929974>
+- <http://clubelo.com/System>
+- <https://arxiv.org/abs/2304.09078>
+- <https://seanelvidge.com/articles/2025/Football_team_rankings/>
+- <https://arxiv.org/html/2609.21674>
+- <https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0017664>
+- <https://fse.studenttheses.ub.rug.nl/19333/1/bMATH_2019_GuanqunMa.pdf>
+- <https://blog.footballpredictai.com/what-is-the-elo-rating-system-in-football>
+
+## q09 — How large and how stable is Premier League home advantage now (including the post-COVID period), and how should a model estimate it?
+
+**Personas:** domain-expert · **Retrieval:** mixed · **Status:** answered
+
+Computed from football-data.co.uk full-season results (380 matches each), EPL home-win % and mean home-minus-away goal difference were: 2015/16 41.3% (+0.28), 2016/17 49.2% (+0.39), 2017/18 45.5% (+0.38), 2018/19 47.6% (+0.32), 2019/20 45.3% (+0.31), 2020/21 37.9% (+0.01, away wins 40.3%), 2021/22 42.9% (+0.21), 2022/23 48.4% (+0.42), 2023/24 46.1% (+0.32), 2024/25 40.8% (+0.09, away 34.7%), 2025/26 42.6% (+0.30); the Premier League era average is 45.8% (Opta). These match premierleague.com (47.6/45.3/37.9/42.9) and Opta (48.4 for 2022/23, 37.9 record low) - note premierleague.com's '49.3%' for 2022/23 and Opta's '39.0%' for 2024/25 were mid-season snapshots, and Opta's 14 Sep 2026 figure of 30.8% for 2026/27 covers only 39 matches. Model-based estimates: the JRSS-C state-space model puts the common home-goal advantage at ~0.25-0.35 goals/match across EPL history with a dramatic 2020/21 dip; my own per-season Poisson fits give a log-scale home multiplier of 0.21-0.29 pre-COVID, 0.007 in 2020/21, 0.15 in 2021/22, 0.29 in 2022/23, 0.20 in 2023/24, 0.06 in 2024/25 and 0.21 in 2025/26. Causal COVID studies disagree on magnitude: Bryson et al. (2021) find closed-door matches had 35.6% home wins (-10.2 pp), +7.8 pp away wins and -0.30 goal difference, but after matching the effect is 'reduced and not statistically significant', with the robust effect being ~1/3 fewer yellow cards for away teams; Benz & Lopez (2021, 17 leagues, bivariate Poisson) find heterogeneous effects, some leagues rising; a Bundesliga study finds -13 pp home-win probability during the first ban but 2020/21 already back near 2018/19 levels and 2023/24 goal difference (+0.4) identical to pre-COVID; an extended Bradley-Terry EPL study reports eta = 0.371 (2014-19), 0.152 (2020-22), 0.850 (2023), the last being implausibly high and contradicted by the 40.8% home-win rate of 2024/25. Recommendation: estimate home advantage as a single league-level parameter that is time-varying (state-space with between-season forgetting, or a fixed effect refit on the trailing 2-3 seasons with the same exponential decay as team strengths) - season-to-season swings of ±0.15 goals (2022/23 vs 2024/25) are too large to hard-code, while 19 home matches per team per season make team-specific home effects weakly identified (Wang et al. find lower-ranked teams retain more HFA, but only a hierarchical/shrunk team-specific term is defensible).
+
+> **Notes / caveats:** Season percentages are my own computation from football-data.co.uk CSVs (E0, seasons 1516-2526) cross-checked against premierleague.com and Opta where available. Conflict: premierleague.com 49.3% (2022/23) and Opta 39.0% (2024/25) are in-season figures, not final; final values are 48.4% and 40.8%. The PLOS ONE Bradley-Terry 'post-COVID eta=0.85' is an outlier relative to raw data.
+
+**Sources:**
+
+- <https://www.football-data.co.uk/englandm.php>
+- <https://www.premierleague.com/en/news/2916832>
+- <https://theanalyst.com/articles/premier-league-home-wins-covid-levels>
+- <https://theanalyst.com/articles/premier-league-no-home-wins-single-matchday>
+- <https://www.fiso.co.uk/premier-league-scoring-trends-2024-25-season-vs-2025-26-gw25-whats-changed/>
+- <https://academic.oup.com/jrsssc/article/74/3/717/7929974>
+- <https://centaur.reading.ac.uk/101715/1/closeddoors_reade_singleton.pdf>
+- <https://arxiv.org/abs/2012.14949>
+- <https://arxiv.org/pdf/2411.12509>
+- <https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0332627>
+- <https://arxiv.org/pdf/2205.07193>
+
+## q10 — How much predictive value do lineup, injury, suspension, and squad-availability features add over pure team-strength models in published studies or public model comparisons?
+
+**Personas:** domain-expert · **Retrieval:** web-search · **Status:** partial
+
+The published gains are real but modest. Arntzen & Hvattum (Statistical Modelling 2021) compare Elo team ratings with plus-minus player ratings averaged over the announced starting XI: each alone forecasts 'about equally well', but using both covariates is 'significantly better' than either (no effect size in the abstract; ordered logit and competing-risk models gave equivalent results). Csató & Csurilla (2026, 1,503 UCL/UEL matches, 600-match test) find lagged Transfermarkt squad values forecast as well as Elo (RPS x100 19.53 vs 19.73; log loss 0.928 vs 0.932), with an equal-weight pool at 19.43 / 0.923, i.e. a ~1.5% RPS improvement that is 'statistically uncertain' versus Transfermarkt alone; Peeters (IJF 2018) similarly finds Transfermarkt crowd valuations beat FIFA rankings and Elo for international results with 'sizable' betting gains. FiveThirtyEight's SPI used Transfermarkt values only to seed pre-/early-season ratings and did not use lineups, injuries or suspensions - its own methodology and post-mortems list injuries, manager changes and fixture congestion as blind spots that register only once they show up in match data. In the 2023 Soccer Prediction Challenge (results-only data) Yeung et al. found team rating features (pi-ratings) dominated gradient-boosted models, and Fischer & Heuer report that adding features to Poisson/NN models changed 5-league prediction quality only marginally, which bounds what availability features can add on top of good ratings. No Premier-League-specific study quantifying injury/suspension features in RPS terms was found; the practical expectation from the player-rating and market-value literature is roughly 0.001-0.003 RPS (1-2%), concentrated in matches with multiple key absences and in the first ~10 rounds after a transfer window, comparable to the gap between model families and smaller than the gap to bookmaker odds.
+
+> **Notes / caveats:** Arntzen & Hvattum full text and Peeters (2018) abstract were behind 403s, so effect sizes are as stated in abstracts/snippets only. FiveThirtyEight's original methodology page now redirects; the 'does not account for injuries' statement is from secondary write-ups. Searches for club-level studies with injury/suspension features (Premier League) returned nothing quantitative.
+
+**Sources:**
+
+- <https://journals.sagepub.com/doi/abs/10.1177/1471082X20929881>
+- <https://ouci.dntb.gov.ua/en/works/4NeKygj7/>
+- <https://arxiv.org/html/2609.21674>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207017300754>
+- <https://fromthebyline.substack.com/p/fivethirtyeight-is-dead-long-live>
+- <https://github.com/fivethirtyeight/data/tree/master/soccer-spi>
+- <https://arxiv.org/html/2309.14807>
+- <https://arxiv.org/abs/2408.08331>
+
+## q11 — Which metric should a 1X2 forecast be evaluated on (ranked probability score, log loss, Brier, accuracy), why does the football literature favour RPS, and what baseline/skill score should results be reported against?
+
+**Personas:** domain-expert, adjacent-expert, newcomer · **Retrieval:** mixed · **Status:** answered
+
+Evaluate the probability vector, not the argmax: accuracy discards calibration and treats a 51/49 call the same as a 90/10 call, and the field uses proper scoring rules instead. Constantinou & Fenton (JQAS 2012, 'Solving the problem of inadequate scoring rules...') argued that H/D/A is an ordered (ranked) scale, so probability placed on outcomes 'close' to the actual one (a draw when the home side won) should be penalised less than probability on a distant one (an away win), and proposed the Ranked Probability Score, RPS = (1/(r-1)) * sum_{i=1}^{r-1} (sum_{j<=i} (p_j - o_j))^2 with r = 3; lower is better, and it has since become the de-facto football metric (it was the official metric of the 2017 Soccer Prediction Challenge, where bookmakers scored 0.2020 and the winner 0.2063). Wheatcroft (JQAS 2021, arXiv 1908.08980) disputes this: once the outcome is known 'this tells us little or nothing about the probability of a draw or an away win', so probability placed on outcomes that did not happen is irrelevant and only a local score (the ignorance/log score, -log2 p(outcome)) uses exactly the available information; in simulation experiments over Constantinou & Fenton's own five example matches and over 6,460 PL matches (plus the four divisions below, 2005/06 onward, using bookmaker-implied probabilities), the ignorance score selected the 'perfect' forecaster more often than RPS or Brier for almost every sample size n, with RPS and Brier showing no systematic difference, so he recommends the ignorance score and calls the sensitivity-to-distance argument 'oversimplistic'. Practical resolution used by practitioners: report RPS (for comparability with the literature and the challenge baselines) and log loss (Wheatcroft's local score) together, plus Brier and calibration plots; do not lead with accuracy. Baselines/skill: report every score against (a) a naive climatology model using historical H/D/A base rates (PL 2021-26 RPS about 0.227-0.235) and (b) implied probabilities from closing bookmaker odds with the overround removed (PL 2021-26 RPS 0.181-0.205, log loss 0.90-1.01), and express improvement as a skill score 1 - RPS_model / RPS_baseline; a model that lands between climatology and the market is useful, one matching the market (RPS gap < 0.002) is excellent.
+
+> **Notes / caveats:** The RPS formula and the skill-score convention are model-knowledge (standard definitions). Wheatcroft's real-data figures (6,460 PL matches from 2005/06) were read from the arXiv PDF text. Baseline RPS/log-loss values for the PL were computed by us from football-data.co.uk closing odds; see q03/q21.
+
+**Sources:**
+
+- <https://www.degruyterbrill.com/document/doi/10.1515/1559-0410.1418/html>
+- <http://constantinou.info/downloads/papers/solvingtheproblem.pdf>
+- <https://arxiv.org/abs/1908.08980>
+- <https://www.degruyterbrill.com/document/doi/10.1515/jqas-2019-0089/html?lang=en>
+- <http://eprints.lse.ac.uk/111494/>
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <https://en.wikipedia.org/wiki/Forecast_skill>
+
+## q12 — Which data sources (free: football-data.co.uk, FBref, Understat, football-data.org; paid: API-Football, Sportmonks, Opta/Stats Perform, StatsBomb) provide reliable Premier League fixtures, results, lineups, xG, and odds, what do they cost, and how stable are their schemas and terms of use?
+
+**Personas:** practitioner, newcomer, product-owner · **Retrieval:** web-search · **Status:** answered
+
+Free: football-data.co.uk gives Premier League results 1993/94-2026/27 as CSVs with a stable, documented schema (FTHG/FTAG/FTR, shots, corners, cards) plus opening odds for Bet365/Pinnacle/William Hill etc. and market Max/Avg, with closing odds under a 'C' suffix (e.g. B365CH, PSCH); it has no xG and no lineups (notes.txt, fetched 2026-09-22). football-data.org free tier: 12 competitions incl. PL, 10 calls/min, fixtures/delayed scores/tables only; lineups/subs/scorers need the 'Deep Data' plan (EUR 29/mo, 30 calls/min), Standard EUR 49 (60/min, 30 comps), Advanced EUR 99, Pro EUR 199; Odds add-on EUR 15/mo (pre-match, 40 comps), Statistics add-on EUR 15/mo (pricing page, 2026-09-22). Understat provides PL xG/npxG and shot-level data back to 2014/15 but only via scraping of embedded JSON (unofficial libraries understatapi, soccerdata, penaltyblog); no published API or terms were found. FBref is no longer a free xG source: Opta/Stats Perform terminated its advanced-data feed and xG/xA/xGOT were removed around 20-23 January 2026; Sports Reference rate-limits FBref to ~10 requests/min (20/min on other SR sites) with a 1-hour ban, and its Data Use page says you should not build websites/tools from scraped data or use automated access without written permission. StatsBomb open data is free for non-commercial use with attribution (StatsBomb logo), includes 2015/16 PL event data with shot xG, but no current PL seasons. Paid: API-Football free 100 req/day (10/min, limited history), Pro $19/mo 7,500 req/day, Ultra $29 75,000/day, Mega $39 150,000/day, all endpoints incl. fixtures, lineups, injuries, xG for top-5 leagues and odds (secondary source dated 2026-09-12; the pricing page itself blocked fetch). Sportmonks: Starter EUR 29/mo (5 leagues, 2,000 calls/hr), Growth EUR 99 (30 leagues), Pro EUR 249 (120 leagues), 14-day trial; base lineups included, xG add-on from EUR 24/mo, Odds & Predictions from EUR 15/mo, Premium Expected Lineups EUR 199/mo (Growth+; claims ~84% PL accuracy, published hours before the ~1h official sheet); no PL-only plan exists despite third-party claims of 'EUR 34/mo'. The Odds API (site, 2026-09-22): free 500 credits/mo (all sports/markets, historical), 20K credits $30/mo, 100K $59, 5M $119, 15M $249; one request = one sport x market x region combo; EPL incl. Pinnacle in paid tiers. Opta/Stats Perform and commercial StatsBomb are enterprise, quote-only (third-party estimates $500-1,000+/mo starting). Betfair Exchange API: delayed key free, live key GBP 299 one-off. Schema stability: football-data.co.uk, ClubElo and football-data.org v4 have been stable for years; scraper-based sources (FBref, Understat, Sofascore) break periodically (soccerdata 1.9.x added Selenium/Cloudflare workarounds in 2026) and carry ToS risk.
+
+> **Notes / caveats:** Conflicts: (1) The Odds API third-party summaries say Pro $29/20,000 req and free = 25 req/day NBA/MLB only; the vendor site fetched 2026-09-22 says free 500 credits/mo all sports, 20K = $30. Vendor site used. (2) A search summary claimed Sportmonks has a EUR 34/mo Premier League plan; the vendor PL page says no PL-only plan (Starter EUR 29, 5 leagues). (3) Older guides list FBref as free xG; that ended January 2026. API-Football and Sports Reference pages returned HTTP 403 to fetch, so their numbers come from a 2026-09-12 survey article and search snippets of the SR pages. Understat ToS could not be located. StatsBomb open-data non-commercial clause is from secondary summaries of the LICENSE.pdf, not the PDF itself.
+
+**Sources:**
+
+- <https://www.football-data.co.uk/notes.txt>
+- <https://www.football-data.co.uk/englandm.php>
+- <https://www.football-data.org/pricing>
+- <https://awfulannouncing.com/soccer/sports-reference-pulls-advanced-data-agreement-violation-dispute.html>
+- <https://www.sports-reference.com/bot-traffic.html>
+- <https://www.sports-reference.com/data_use.html>
+- <https://www.liamhenshaw.com/writing/where-to-find-football-data>
+- <https://github.com/statsbomb/open-data>
+- <https://blogarchive.statsbomb.com/news/the-2015-16-big-5-leagues-free-data-release-premier-league/>
+- <https://dev.to/leomarsh886/a-survey-of-public-apis-for-building-a-football-live-score-site-in-2026-part-3-football-data-api-16hi>
+- <https://www.api-football.com/pricing>
+- <https://www.sportmonks.com/football-api/plans-pricing/>
+- <https://www.sportmonks.com/football-api/premier-league-api/>
+- <https://docs.sportmonks.com/v3/endpoints-and-entities/endpoints/premium-expected-lineups>
+- <https://the-odds-api.com/>
+- <https://www.statsperform.com/stats-perform-faqs-pricing-and-licensing/>
+- <https://sportsapi.com/api-directory/statsperform/>
+- <https://support.developer.betfair.com/hc/en-us/articles/115003864531-Are-there-any-costs-associated-with-API-access>
+- <https://github.com/collinb9/understatAPI>
+- <https://github.com/probberechts/soccerdata/releases>
+
+## q13 — When should predictions be generated for a Friday-to-Monday matchweek, given lineups are only confirmed ~1 hour before kickoff, and how much does forecast skill degrade with lead time?
+
+**Personas:** practitioner, adjacent-expert · **Retrieval:** mixed · **Status:** answered
+
+Evidence says lead time costs little for a goals/ratings model: a walk-forward study of 5,286 top-5-league matches over 3 seasons (football-data.co.uk odds + Understat xG) found opening-line multiclass Brier 0.5747 vs closing 0.5734, a ~0.2% difference, and a goals-only model (0.5854) had zero ability to predict line movement (r = -0.02), concluding 'whatever the market knows, it knows days before kickoff'. Bookmaker analysts likewise report closing lines beat openers by only ~0.9 percentage points and that the difference is often not statistically significant, while Pinnacle closing odds are near-perfectly calibrated (r^2 = 0.997 on 397,935 matches) and using pre-closing Pinnacle odds as ground truth yielded 3.8% expected vs 3.6% realised ROI over 31,247 bets. Team news does matter at the margin: Arntzen & Hvattum (2021) found that adding starting-XI player plus-minus ratings to team Elo improved forecasts over either alone, and betting guides claim a star absence moves odds 5-15% (unquantified marketing claims). Practical schedule: publish a first full-matchweek forecast on Tuesday/Wednesday once the previous round's results are ingested (ratings refit), refresh Thursday/Friday after press-conference injury news (Sportmonks' paid expected lineups claim ~84% PL accuracy hours before the official sheet), and optionally re-run per match at T-60 minutes when official lineups arrive for a lineup-adjusted variant; store every version with a timestamp so you can score skill by lead time. Expect the measurable gain from the T-60 refresh to be small for a team-strength model; the larger value of the late run is catching unexpected rotations (cup weeks, European fixtures) and postponements.
+
+> **Notes / caveats:** No peer-reviewed study quantifying PL forecast-skill decay per day of lead time was found; the 0.9pp closing-vs-opening figure and 'not statistically significant' finding come from NFL-oriented sources, whereas the JonahXA study is football-specific. The 5-15% odds-shift claim is from betting-affiliate content, not research. The publication schedule is a synthesis (model-knowledge) from these findings.
+
+**Sources:**
+
+- <https://github.com/JonahXA/closingline>
+- <https://www.boydsbets.com/opening-vs-closing-line/>
+- <https://www.researchgate.net/publication/233427163_The_Performance_of_Betting_Lines_for_Predicting_the_Outcome_of_NFL_Games>
+- <https://blog.pyckio.com/en/eg-pinnacle-closing-odds/>
+- <https://www.pinnacle.com/betting-resources/en/betting-strategy/what-distinguishes-winning-from-losing-bettors/6bt2g5bmd43myskt>
+- <https://journals.sagepub.com/doi/abs/10.1177/1471082X20929881>
+- <https://docs.sportmonks.com/v3/endpoints-and-entities/endpoints/premium-expected-lineups>
+- <https://news.22bet.com/wiki/betting-guide/lineups-team-news-injuries-football-betting-strategy-odds-movement/>
+
+## q14 — How do gradient-boosted tree models (XGBoost/LightGBM/CatBoost) compare with Poisson/Elo-style models on Premier League forecasting accuracy and on maintenance cost in production?
+
+**Personas:** practitioner · **Retrieval:** mixed · **Status:** answered
+
+The 2017 Soccer Prediction Challenge (results published in Machine Learning 2019) was won by Hubacek, Sourek and Zelezny with XGBoost on hand-built features dominated by pi-ratings and a PageRank rating: RPS 0.2063, accuracy 52.43% on the challenge test set; Constantinou's Dolores hybrid Bayesian network was second (RPS 0.2083), and Berrar et al. later reported 0.2054 post-competition with XGBoost + kNN on their own 'Berrar ratings', so the whole top group sat inside RPS 0.2054-0.2087 and accuracy 51.5-53.9% (Fischer & Heuer 2024 make exactly this point). In the 2023 challenge (714 mixed-league matches) Yeung et al. report CatBoost + pi-ratings at RPS 0.2085 versus their deep-learning model at 0.2098 and an out-of-competition bookmaker-consensus entry at 0.2063, i.e. the GBT-on-ratings approach was within ~0.002 RPS of the market. Head-to-head evidence that GBTs beat classical goal models is weak: Fischer & Heuer (arXiv 2408.08331, five top leagues) find a small neural net, a random forest and a Poisson model 'perform similarly' with cross-entropy differences inside the error bars, and Koopman & Lit (IJF 2019) get average RPS of 0.198-0.208 for England from static-to-dynamic bivariate Poisson/Skellam models on results alone, the same band the boosting entries occupy. Rating-only baselines are also close: pena.lt/y measures pi-ratings RPS 0.199 vs Elo 0.204 (Eredivisie), and a six-way Poisson-family shootout there spans only 0.1914-0.1916 RPS (Dixon-Coles with optimised time decay 0.1891), so the feature set (pi-ratings, time-decay) moves RPS more than the model class does. One EPL-specific paper (Baboota & Kaur, IJF 2019, search-snippet numbers) reports gradient boosting at RPS 0.2156 vs bookmakers 0.2012 over 2014/15-2015/16, a bigger gap than the challenge results. On maintenance cost the literature is silent; the practical view (model-knowledge) is that a Dixon-Coles/Elo pipeline has a handful of parameters, refits in seconds and fails transparently, whereas a GBT stack needs a feature store (rolling ratings, odds, xG), periodic re-tuning and drift monitoring, for a gain the published numbers put at roughly 0.001-0.005 RPS.
+
+> **Notes / caveats:** Koopman & Lit numbers read from the paper PDF (Int. J. Forecasting 35(2):797-809, Table 3) which was saved locally; no stable URL captured so it is cited in-text only. Baboota & Kaur figures (0.2156 vs 0.2012) come from a search snippet; ScienceDirect page returned 403 so they are unverified against the paper. The 2023 challenge official leaderboard (sites.google.com results page) is image-only and could not be read; the 0.2063/0.2085/0.2098 figures are as reported by Yeung et al. Note the 2019-dated results are the 2017 challenge published in 2019; Razali et al. later report CatBoost + pi-ratings at RPS 0.1925 (55.8% acc) on the same data but with a different evaluation protocol, so it is not directly comparable to the 0.2063 challenge score. Maintenance-cost comparison is model-knowledge, no source found.
+
+**Sources:**
+
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <https://arxiv.org/html/2309.14807>
+- <https://arxiv.org/abs/2403.07669>
+- <https://arxiv.org/abs/2408.08331>
+- <https://mlanthology.org/mlj/2019/berrar2019mlj-incorporating/>
+- <https://pena.lt/y/2025/03/10/which-model-should-you-use-to-predict-football-matches/>
+- <https://pena.lt/y/2025/04/14/pi-ratings-the-smarter-way-to-rank-football-teams/>
+- <https://thexgfootballclub.substack.com/p/which-machine-learning-models-perform>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207018300116>
+- <http://probabilityandlaw.blogspot.com/2018/05/anthony-constantinous-football.html>
+
+## q15 — What retraining cadence is appropriate for a 380-match season, and how can model drift or silent degradation be detected with so few matches per week?
+
+**Personas:** practitioner · **Retrieval:** mixed · **Status:** answered
+
+Refitting is cheap, so refit team-strength parameters after every matchday: penaltyblog fits Dixon-Coles on 50,000 matches in 3.2 s (benchmark reported 2026-09-20), and a Dixon-Coles with exponential time decay is effectively a rolling model already (Dixon & Coles' xi = 0.0065 per half-week ~ 0.0019/day, ~1-year half-life; penaltyblog's own tuning found xi ~ 0.001/day best, RPS ~0.218). Reserve re-tuning of hyperparameters (xi, calibration layer, feature set) for once per season or at the midpoint, because benchmark evidence shows model-class choice moves RPS by only ~0.01 while a single feature change moved it 0.08. Reference MLOps setups use a two-cadence pattern: daily result ingestion and prediction refresh, weekly (Monday) train-evaluate-promote-if-better with Evidently drift reports; one such walk-forward over 17 seasons/4,143 matches got best log-loss 0.9936 vs bookmaker 0.9597 with the gap's 95% bootstrap CI entirely above zero. Detection with ~10 matches/week: score every match with RPS/Brier/log-loss against the de-vig closing market (PL 2021/22-2025/26 benchmarks: closing market Brier 0.189, RPS 0.194; uniform 0.222/0.238; a 2022-2026 benchmark found Elo->multinomial logit Brier 0.1951, Dixon-Coles 0.2051, closing market 0.1901) and track the paired difference (model minus market) per match, not the raw score, since raw per-season Brier swings 0.176-0.203 with the same market. Use a CUSUM or combined Shewhart+CUSUM chart on the paired-difference series (a calibration-monitoring CUSUM for probability forecasts was proposed in arXiv 2510.25573), which is designed to flag small sustained shifts; with ~0.03 per-match SD of the difference, a persistent 0.01 RPS deterioration takes roughly 100+ matches (~10 weeks) to become detectable, so also monitor leading indicators: calibration reliability by bin, mean absolute model-vs-market probability gap, and data-quality checks (missing fixtures, team-name mismatches, stale odds) that cause silent degradation more often than genuine concept drift. Compare against a frozen shadow model and the market every week; promote only if the candidate beats the incumbent on the same held-out matches.
+
+> **Notes / caveats:** The '~100 matches to detect 0.01 RPS' estimate is model-knowledge back-of-envelope, not from a source. Benchmarks disagree on Dixon-Coles vs Elo ordering: footballproofai (2026-07-18) ranks Elo->logit above Dixon-Coles, while Hubacek et al. (2019) report bookmakers RPS 0.2012 vs their GBT model 0.2156 on PL 2014-16 game weeks 6-38 (numbers from a search snippet; the Springer page required login).
+
+**Sources:**
+
+- <https://github.com/mattyorkilous/soccer/pull/18>
+- <https://opisthokonta.net/?p=1013>
+- <https://pena.lt/y/2021/06/24/predicting-football-results-using-python-and-dixon-and-coles/>
+- <https://github.com/mateusz-gob1/football-outcome-mlops>
+- <https://footballproofai.com/research/football-1x2-scoring-benchmark>
+- <https://footballproofai.com/research/epl-football-prediction-model-benchmark>
+- <https://arxiv.org/html/2510.25573v1>
+- <https://www.academia.edu/3056385/Monitoring_Forecast_Errors_with_Combined_CUSUM_and_Shewhart_Control_Charts>
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+
+## q16 — How should a model handle promoted teams with no Premier League history, early-season cold start, and postponed or rescheduled fixtures?
+
+**Personas:** practitioner · **Retrieval:** mixed · **Status:** partial
+
+Common practice, with trade-offs: (1) Elo systems such as ClubElo carry a club's rating across divisions (ClubElo tracks all levels since 1939, so a promoted club simply keeps its Championship-earned Elo; free CSV at api.clubelo.com/YYYY-MM-DD), which is the cleanest option if you ingest Championship results. (2) Assigning a fixed default (1500 in England per footballdatabase.com) causes rating inflation because relegated clubs take points out of the pool (opisthokonta.net); a documented fix is to give promoted teams the average rating of the relegated teams or to renormalise returning teams so the league mean stays 1500 (aussportstipping.com formula). (3) Goals models (Dixon-Coles) cannot estimate attack/defence for teams with no PL matches, so practitioners either fit on multiple seasons including Championship data with time decay, or skip early rounds: opisthokonta skipped the first 10 matchdays of each season 'to avoid problems with lack of data for the promoted teams', and Hubacek et al. evaluated only game weeks 6-38 on the PL. (4) Squad-value priors (Transfermarkt) are used in academic Elo comparisons and can seed a promoted team's rating from the relegated-team average with a squad-value adjustment; research found Elo insensitive to summer squad changes and proposed 'structural shock' RD increases at season start (arXiv 2607.01722), and 538-style systems regress ratings ~1/3 toward the mean between seasons. Cold start: no source gives a hard number; the practical proxies are the 5-10 matchday exclusions above and the season-start regression rule, so plan for wider uncertainty (larger K or RD, heavier prior weight) for roughly the first 6-10 rounds and evaluate early-season skill separately. Postponements: a SportRxiv preprint (2026-09-22) found 41.4% of PL fixtures 2021/22-2025/26 were played on a different date than originally published (broadcast moves rose 138->154 per season; unplanned postponements fell 36->3), so key everything on fixture ID and actual kickoff datetime, not matchweek number; use date-based time decay (matches count when played), re-pull the fixture list before every forecast run, and treat a postponed match as a new forecast when rescheduled (games-in-hand simply mean fewer observations for that team, which Dixon-Coles handles naturally).
+
+> **Notes / caveats:** No source quantifies 'matches until ratings stabilise'; the 6-10 round figure is inferred from practitioner exclusions. The 'regress 1/3 toward mean' rule appears in a tutorial (statsultra) rather than the FiveThirtyEight methodology page, which now redirects (site defunct). ClubElo's own methodology page could not be fetched cleanly (api.clubelo.com refused connection; clubelo.com/System page did not document promotion handling), so the cross-division carry-over claim is model-knowledge consistent with the API's all-levels coverage. The 'relegated-team average' approach is documented in a search snippet whose exact page could not be re-fetched.
+
+**Sources:**
+
+- <http://clubelo.com/API>
+- <https://soccerdata.readthedocs.io/en/latest/reference/clubelo.html>
+- <https://footballdatabase.com/methodology>
+- <https://opisthokonta.net/?p=404>
+- <https://www.aussportstipping.com/sports/epl/elo_ratings/>
+- <https://opisthokonta.net/?p=1013>
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <https://arxiv.org/html/2609.21674>
+- <https://arxiv.org/html/2607.01722v1>
+- <https://statsultra.com/how-to-build-an-elo-rating-system-for-the-premier-league-in-python/>
+- <https://sportrxiv.org/index.php/server/preprint/view/1059>
+- <https://www.premierleague.com/en/about/faq/fixtures>
+
+## q17 — Should bookmaker odds be used as a model input or as the forecast itself (de-vigged implied probabilities), what value does a model add over shipping the odds, and what are the licensing / terms-of-service pitfalls of scraping odds?
+
+**Personas:** skeptic, practitioner · **Retrieval:** web-search · **Status:** answered
+
+The evidence says de-vigged closing odds are the strongest single forecast available and any model should be judged against them: Wunderlich & Memmert's odds-based Elo cannot by design beat the odds it is built from, Koopman & Lit find no results-only model beats the bookmaker in a betting simulation, and in the 2023 challenge the bookmaker consensus (RPS 0.2063) edged the best ML entries (0.2085). On de-vigging, Strumbelj (IJF 2014) showed Shin probabilities beat basic normalisation on football RPS; more recent work argues the power method or even simple multiplicative normalisation is as good in low-margin markets (Berk 2024: 'you're sacrificing nothing by using the simplistic multiplicative method' where overround is small; a 2026 arXiv EMH paper reports log-loss 1.00334-1.00455 for power vs 1.00372-1.00575 for multiplicative across five bookmakers, with a favourite-longshot-corrected GLM lowest at 1.00239-1.00404), and the opisthokonta 'implied' package author explicitly says no method wins everywhere. The value a model adds is therefore not accuracy but (a) coverage when odds are absent or stale (early-week, lower leagues), (b) a house view for content/explanations, and (c) decorrelation for betting-style products, where Hubacek et al. and Kaunitz et al. show profit comes from disagreeing with the market, not from being more accurate. Licensing: Oddsportal's terms forbid commercial use (2.2), extraction of a substantial part of the database (2.10) and 'embedding, aggregating, scraping or recreating' content or burdening the server with automated requests (2.11), so a commercial app scraping it is in breach even though Football-Data.co.uk itself lists Oddsportal and Betbrain as sources; The Odds API permits display in commercial apps, storing data indefinitely and training models, but bans reselling or redistributing the data as a standalone feed (historical calls cost 10x credits); Betfair's Exchange API is free only for personal use, with separate Software Vendor, Odds Publisher and Betting Operator data licences for commercial use, and its historical data comes in Basic (free, 1-minute last-traded), Advanced (1-second, top-3 ladder) and Pro (50 ms full ladder) paid tiers restricted to Betfair customers in permitted jurisdictions.
+
+> **Notes / caveats:** Disagreement between sources: Strumbelj 2014 (Shin > basic normalisation) vs Berk 2024 and the 2026 EMH paper (power/multiplicative as good or better today); the likely reconciliation is that margins have fallen since Strumbelj's 2000s data. Betfair licence pricing is not published on the pages fetched; a third-party guide quotes GBP 30-200/month for Advanced tier but this is unverified. Egidi, Pauli & Torelli (hierarchical Bayesian Poisson with odds as an input, four top leagues) note that on RPS their odds-informed model 'does not improve the bookmakers' probabilities' on average - read from the saved PDF, no URL captured. Legal status of scraping public data (hiQ v LinkedIn) is separate from contractual ToS breach and from EU/UK database right, which Oddsportal expressly invokes.
+
+**Sources:**
+
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207014000533>
+- <https://algorithmicsportsbetting.substack.com/p/its-time-to-retire-shins-method>
+- <https://opisthokonta.net/?p=1797>
+- <https://github.com/mberk/shin>
+- <https://arxiv.org/html/2604.17194>
+- <https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0198668>
+- <https://arxiv.org/html/2309.14807>
+- <https://www.oddsportal.com/terms/>
+- <https://the-odds-api.com/terms-and-conditions.html>
+- <https://support.developer.betfair.com/hc/en-us/articles/360002464152-Which-API-Licence-Do-I-Require>
+- <https://betfair-datascientists.github.io/data/usingHistoricDataSite/>
+- <https://www.football-data.co.uk/notes.txt>
+- <https://arxiv.org/abs/1710.02824>
+- <https://www.sciencedirect.com/science/article/abs/pii/S016920701930007X>
+
+## q18 — Which open-source libraries or reference implementations (penaltyblog, soccerdata, ClubElo, others) are mature enough to build a Premier League predictor on rather than writing models from scratch?
+
+**Personas:** practitioner, newcomer · **Retrieval:** web-search · **Status:** answered
+
+penaltyblog (Python, martineastwood) is the most complete and actively maintained: v1.12.2 released 2026-09-13 (Python 3.10-3.15), Cython-accelerated Poisson, Dixon-Coles, Bivariate Poisson (Karlis-Ntzoufras), Negative Binomial, Weibull-copula, Bayesian and hierarchical Bayesian goal models, Bayesian Skellam, plus Elo, Pi-ratings, Massey and Colley, implied-odds/de-vig tools, backtesting, and scrapers for football-data.co.uk, Understat, ClubElo and FPL; an independent 2026-09-20 review called it 'the only maintained Python option' (Dixon-Coles on 50k matches in 3.2 s, per-match weights, neutral-venue flag) but noted it cannot take per-match covariates. soccerdata (Python, probberechts) v1.9.1 (2026-07-24) is a data-access layer only (ClubElo, ESPN, FBref, football-data.co.uk, Sofascore, SoFIFA, Understat, WhoScored) with Cloudflare/Selenium workarounds; it removed FotMob and FiveThirtyEight in v1.9.0. ClubElo is a free daily-CSV API (api.clubelo.com/YYYY-MM-DD, /CLUBNAME) rather than a library, giving ready-made Elo with home-field advantage (~42 points shown in current PL calculations). ScraperFC v4.5.0 (2026-04-08) is another maintained scraper. Not recommended as a base: footballdata (Python) last released 2017-07-17; worldfootballR (R) was archived read-only on 2025-09-18 and had dropped FotMob and CRAN; socceraction 1.5.3 has had no PyPI release in 12+ months and is for event-data valuation (VAEP/xT), not match prediction. R alternatives: goalmodel (opisthokonta, GitHub-only v0.6.4: Poisson, Dixon-Coles, negative binomial, Dixon-Coles time weighting), regista (Torvaney, GitHub-only, Dixon-Coles), and footBayes 2.0.0 on CRAN (double Poisson, bivariate Poisson, Skellam, student-t, diagonal-inflated bivariate Poisson, zero-inflated Skellam; MLE plus Stan MCMC/variational/Laplace). Reference implementations to crib from: pena.lt/y and dashee87 Dixon-Coles tutorials, and the mateusz-gob1/football-outcome-mlops repo for a full MLflow/Airflow pipeline with walk-forward evaluation vs bookmaker baseline.
+
+> **Notes / caveats:** soccerdata release dates were shown as day-month only ('24 Jul', '12 Apr') on the GitHub releases page; year 2026 is inferred from ordering. goalmodel's last-commit date was not retrieved. penaltyblog's changelog listed v1.12.0 (2026-08-21) while PyPI shows 1.12.2 (2026-09-13); PyPI used as latest.
+
+**Sources:**
+
+- <https://pypi.org/project/penaltyblog/>
+- <https://penaltyblog.readthedocs.io/en/latest/changelog/index.html>
+- <https://github.com/martineastwood/penaltyblog>
+- <https://github.com/mattyorkilous/soccer/pull/18>
+- <https://github.com/probberechts/soccerdata/releases>
+- <https://soccerdata.readthedocs.io/en/latest/reference/clubelo.html>
+- <http://clubelo.com/System>
+- <https://pypi.org/project/ScraperFC/>
+- <https://libraries.io/pypi/footballdata>
+- <https://github.com/JaseZiv/worldfootballR>
+- <https://libraries.io/pypi/socceraction>
+- <https://github.com/opisthokonta/goalmodel>
+- <https://github.com/Torvaney/regista>
+- <https://rdrr.io/cran/footBayes/>
+- <https://github.com/mateusz-gob1/football-outcome-mlops>
+- <https://dashee87.github.io/football/python/predicting-football-results-with-statistical-modelling-dixon-coles-and-time-weighting/>
+
+## q19 — What is the simplest model a developer can build in a weekend that gives credible Premier League matchweek predictions, and what minimal feature set survives data-provider outages?
+
+**Personas:** newcomer, practitioner · **Retrieval:** mixed · **Status:** answered
+
+Two weekend-scale options, both with published skill close to the market: (A) Dixon-Coles via penaltyblog: pb.scrapers.FootballData('ENG Premier League', season).get_fixtures() then pb.models.DixonColesGoalModel(goals_home, goals_away, team_home, team_away).fit() and .predict(home, away) returns a probability grid with 1X2, totals and Asian-handicap markets; add exponential time-decay weights (xi ~ 0.001/day per penaltyblog's tuning, or ~0.0019/day from the original 0.0065 per half-week) over 3-5 seasons; penaltyblog reported RPS ~0.218 on PL test data, and a 2022-2026 walk-forward benchmark scored sequential Dixon-Coles at Brier 0.2051 / RPS 0.2169 vs closing market 0.1901 / 0.1947. (B) Elo: pull api.clubelo.com/YYYY-MM-DD (free CSV; home-field advantage ~42 Elo points in ClubElo's PL calculations) and map Elo difference to 1X2 via a multinomial logistic regression fitted on past seasons; the same benchmark found this Elo->logit model the best history-only approach (Brier 0.1951, RPS 0.2015), beating Dixon-Coles, with under 100 lines of code. Either way the calibration should be sanity-checked against de-vig closing odds (PL benchmark 2021/22-2025/26: market Brier 0.189, RPS 0.194; uniform 0.222/0.238). Outage-resilient minimal feature set: only fixture list (home, away, kickoff datetime) plus historical home/away goals and dates, which are available from three independent free sources (football-data.co.uk CSV, football-data.org free tier at 10 calls/min, ClubElo CSV) and should be cached locally each week so a single provider outage never blocks a forecast; treat xG (Understat scraping), lineups (paid APIs) and live odds (The Odds API 500 free credits/mo) as optional enrichments that degrade gracefully to the goals-only baseline. Keep a frozen fallback copy of last week's ratings so predictions can still be issued if the weekly refit fails.
+
+> **Notes / caveats:** The 'under 100 lines' and caching/fallback recommendations are practitioner synthesis (model-knowledge). Benchmarks conflict on Dixon-Coles vs Elo: footballproofai (1,520 matches, 2022-2026) favours Elo->logit; penaltyblog's own DC tuning reports RPS ~0.218 on 2016-2020 data, roughly comparable to footballproofai's DC RPS 0.2169, and the mattyorkilous review argues feature engineering (0.08 RPS swing) matters far more than model class (~0.01).
+
+**Sources:**
+
+- <https://docs.pena.lt/y/models/dixon_coles.html>
+- <https://pena.lt/y/2021/06/24/predicting-football-results-using-python-and-dixon-and-coles/>
+- <https://opisthokonta.net/?p=1013>
+- <https://footballproofai.com/research/epl-football-prediction-model-benchmark>
+- <https://footballproofai.com/research/football-1x2-scoring-benchmark>
+- <http://clubelo.com/System>
+- <https://soccerdata.readthedocs.io/en/latest/reference/clubelo.html>
+- <https://www.football-data.co.uk/notes.txt>
+- <https://www.football-data.org/pricing>
+- <https://the-odds-api.com/>
+- <https://github.com/mattyorkilous/soccer/pull/18>
+
+## q20 — What accuracy and RPS do bookmaker closing odds achieve on Premier League 1X2, and has any published or public model beaten the closing line consistently out of sample?
+
+**Personas:** skeptic · **Retrieval:** web-search · **Status:** answered
+
+Verified numbers: Football Proof AI (Football-Data.co.uk closing odds, 1,899 EPL matches 2021/22-2025/26) finds the unique closing favourite won 55.98%, ranging 49.5% (2025/26) to 60.0% (2023/24) by season, with 64.9% when the favourite's no-vig probability is at least 50%; a 24-season Bet365 EPL study (9,120 fixtures, power-method de-vig, pre-match not closing odds) finds mean calibration error of 0.93 percentage points and flat-stake ROI of -2.95% (home), -6.99% (draw) and -9.87% (away); Buchdahl's analysis of 57,986 matches shows betting every outcome at margin-free Pinnacle closing prices returns 99.73% (SD 0.40%), i.e. closing odds are essentially unbiased. Bookmaker RPS on English top-flight 1X2 sits around 0.19-0.21 depending on seasons: Baboota & Kaur report 0.2012 for EPL 2014-16 (search snippet), Koopman & Lit's best England models on results alone reach ~0.198 and still lose to the bookmaker in betting, the 2023 challenge bookmaker consensus scored 0.2063 on 714 mixed matches, and a 2026 Betfair-calibrated study reports pre-match exchange accuracy 61.4% with RPS 0.1845 (leagues not EPL-specific). On beating the closing line: Hubacek et al. 2019 is an NBA study (2007-2014 seasons) and its profit came from deliberately decorrelating from the bookmaker, not from higher accuracy, so it is not evidence of a football model beating the closing line; Wunderlich & Memmert state their odds-based Elo 'cannot' beat the odds; Constantinou & Fenton's pi-ratings (JQAS 2013) and pi-football/Dolores report profitability over EPL 2007/08-2011/12 against average (not closing, not Pinnacle) odds with roughly 10-12% overrounds, and Reade, Singleton & Vasilakis (Reading 2020, EPL 2016/17-2017/18) find a Poisson model adds information on scorelines but yields 'no substantial or consistent financial returns' against a ~12% overround; Forrest, Goddard & Simmons (IJF 2005, ~10,000 matches) found odds-setters increasingly hard to beat over time. Kaunitz et al. (2017) made 3.5% over 56,435 bets on closing odds and 6.2% over 672 real-money bets, but by betting the best available price against the cross-bookmaker mean, i.e. exploiting price dispersion rather than forecasting better, and were limited within months. Verdict: no public model has been shown to beat sharp closing 1X2 lines out of sample; the pro benchmark (Pinnacle CLV) is exactly a test of whether you beat the close, and the published academic 'wins' pre-date low-margin closing markets or bet against soft averages.
+
+> **Notes / caveats:** No single source gives an EPL-only closing-odds RPS for recent seasons; the 0.19-0.21 band is assembled from Baboota & Kaur (0.2012, EPL 2014-16, snippet only), Koopman & Lit (England Table 3, PDF), the 2023 challenge (mixed leagues) and the Betfair study (RPS 0.1845, leagues unspecified in the extract). The Bet365 GitHub study uses pre-match (Friday-collected) odds, not closing, which biases against it. Constantinou 2013 QMRO PDF and Wilkens 2026 (Bundesliga 'can simple models beat the odds?') could not be fetched (403). Search budget was exhausted before a direct verification of Baboota & Kaur.
+
+**Sources:**
+
+- <https://footballproofai.com/research/premier-league-favourite-win-rate>
+- <https://github.com/Joshc386/premier-league-odds-analysis>
+- <https://godsofodds.com/en/previews/how-accurate-are-pinnacle-s-closing-odds>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207018300116>
+- <https://arxiv.org/html/2309.14807>
+- <https://arxiv.org/html/2605.16066v1>
+- <https://www.sciencedirect.com/science/article/abs/pii/S016920701930007X>
+- <https://arxiv.org/abs/2010.12508>
+- <https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0198668>
+- <https://ideas.repec.org/a/bpj/jqsprt/v9y2013i1p37-50n4.html>
+- <https://www.sciencedirect.com/science/article/pii/S095070511300169X>
+- <https://www.reading.ac.uk/web/files/economics/emdp202003.pdf>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207005000300>
+- <https://arxiv.org/abs/1710.02824>
+- <https://www.pinnacle.com/betting-resources/en/betting-strategy/what-distinguishes-winning-from-losing-bettors/6bt2g5bmd43myskt>
+
+## q21 — How do reported '70-80% accuracy' claims hold up under proper walk-forward backtesting, how should a developer backtest honestly, and how many matches are needed to distinguish two models with statistically significant RPS differences?
+
+**Personas:** skeptic, newcomer, domain-expert · **Retrieval:** mixed · **Status:** partial
+
+They do not hold up. The strongest honest benchmarks are the 2017 Soccer Prediction Challenge (best model 52.4% accuracy / RPS 0.2063 vs bookmakers 51.9% / 0.2020 on >200,000 training matches), published PL models that 'rarely exceed 60% three-class accuracy', and the closing market itself, which picked the PL winner 49.5-60.0% of the time in 2021-22..2025-26; a 70-80% figure over a full PL season would beat every bookmaker and would be a market-breaking result, so such claims almost always come from leakage (features built with the match's own stats, random K-fold splits across time, calibration fitted on the test fold), cherry-picked windows, or a different market (over/under or double chance, where 70-80% is plausible). Honest protocol (footballproofai and leak-free GitHub pipelines converge on the same rules): sort by kickoff time and enforce max(train time) < min(test time); use rolling-origin / expanding-window evaluation - fit on all seasons (or all matches) before a cutoff, predict the next matchweek or season, append results, advance, repeat, never letting later folds 'repair' earlier ones; build every feature point-in-time (backward-only joins such as merge_asof, a team's rolling form must exclude the match being predicted, season-to-date stats start at zero); fit any calibration layer on out-of-sample training predictions and freeze it before scoring; report per-fold and per-season scores, not one aggregate; and require a minimum evidence base (that site uses >=500 settled test matches, >=3 windows, >=365 days span). Sample size: per-match RPS is very noisy (standard deviation about 0.135 for market forecasts in the PL), so distinguishing models requires paired tests on the same matches (paired t-test, Wilcoxon, or Diebold-Mariano as used by Koopman & Lit for football). Using the paired-t approximation n ≈ 7.84 * (sd_diff/delta)^2 (80% power, 5% two-sided): for two loosely related models (sd of per-match RPS difference ≈ 0.14, measured between the market and a base-rate model) detecting a 0.005 RPS gap needs ~6,000 matches (about 16 PL seasons) and a 0.002 gap ~38,000; for two highly correlated models (Bet365 vs Pinnacle closing, sd_diff ≈ 0.006-0.011) a 0.002 gap needs only ~150-250 matches. Practically, one PL season (380 matches) can only resolve RPS differences of roughly 0.02 between dissimilar models, which is why challenge-scale comparisons use tens of thousands of matches across leagues; a single-league app should backtest over at least 5-10 seasons and report confidence intervals (e.g. bootstrap over matches) rather than point RPS.
+
+> **Notes / caveats:** No peer-reviewed source giving an explicit 'N matches needed' for RPS was found (searched Wheatcroft 2021, Diebold-Mariano football applications, power-analysis literature). The sample-size figures are our own paired-t power calculation using per-match RPS standard deviations computed from football-data.co.uk PL 2021-26 closing odds (market RPS sd 0.124-0.136; sd of B365-minus-Pinnacle per-match RPS 0.0056-0.0108; sd of market-minus-base-rate 0.119-0.143). Wheatcroft's simulations show selection probability rising slowly with n, especially when forecasts differ only in draw/away split, but he reports curves versus log2(n), not a single threshold.
+
+**Sources:**
+
+- <https://footballproofai.com/research/walk-forward-football-model-validation>
+- <https://github.com/C3ltWicho/epl-prediction>
+- <https://link.springer.com/article/10.1007/s10994-018-5704-6>
+- <https://papers.tinbergen.nl/17062.pdf>
+- <https://textinvisible.io/hardest-major-league/>
+- <https://footballinteligence.com/prediction-accuracy>
+- <https://arxiv.org/abs/1908.08980>
+- <https://www.football-data.co.uk/englandm.php>
+
+## q22 — Which data-leakage patterns most commonly inflate football model results (end-of-season aggregates, xG computed with future information, odds captured after team news, table position at test time)?
+
+**Personas:** skeptic · **Retrieval:** mixed · **Status:** partial
+
+The most common patterns found: (1) in-match/full-time statistics used as features (half-time score, shots, shots on target, corners from the Football-Data.co.uk HTHG/HST columns) - Fayinminu's Medium tutorial explicitly warns that training on Half Time Result to predict Full Time Result is leakage, and the Kaggle notebook by maximdrejdink had to switch to a 'new approach: splitting into train and test based on seasons' after random splits; (2) random rather than temporal splits - the xG Football Club review states 'random sampling across seasons violates time-dependency', and Fischer & Heuer/Koopman & Lit both use expanding-window evaluation for this reason; (3) post-kickoff market data - the mosoliman517 Premier League repo removed 'betting-market data' because it 'represented information unavailable before kickoff', found its 2015-16 file was a byte-for-byte duplicate of 2017-18 silently double-counted, and after fixes reports only 49.3% accuracy on a two-season temporal holdout; (4) closing vs early odds - Football-Data.co.uk collects its non-closing odds on Friday/Tuesday afternoons, and Football Proof AI warns that closing odds embed late team news so comparing a Thursday model against them is unfair; (5) temporally contaminated lineups and same-day information - the 2026 LaLiga 'leakage-aware workflow' paper (Array) lists inconsistent team IDs, duplicated match records, contaminated lineup data and target/market misalignment and enforces a d-1 buffer on rolling features. Concrete implausible claims: the 2024 systematic review of ML in sports betting (arXiv 2410.21484) uncritically tabulates a soccer DNN at '99%' accuracy and a gradient-boosting soccer study at '89.6%' accuracy, against a well-established ceiling of ~52-56% and RPS ~0.20 for pre-match 1X2 (2017/2023 challenges), a gap only explainable by leakage or in-play features; Berrar-style challenge analyses also note that studies which 'filter matches by betting odds' availability hamper reproducibility. End-of-season aggregates, current table position at test time and xG models fitted on the full season are the same look-ahead error; no source quantifying their specific inflation was found, so that part is model-knowledge.
+
+> **Notes / caveats:** The Medium (Fayinminu) and Kaggle (saife245) pages returned 403/empty on fetch; their leakage descriptions come from search snippets. The '99%' and '89.6%' soccer accuracy figures are as tabulated in the systematic review; the underlying primary studies were not identified (search budget exhausted), so they are cited as examples of unexamined claims rather than confirmed leakage. No source was found that quantifies the inflation from xG-with-future-information or table-position features specifically.
+
+**Sources:**
+
+- <https://medium.com/@olufaithy/predictive-modelling-for-football-match-results-a-python-and-machine-learning-approach-ec94e9fa2fef>
+- <https://www.kaggle.com/code/maximdrejdink/predicting-football-match-results-classification>
+- <https://thexgfootballclub.substack.com/p/which-machine-learning-models-perform>
+- <https://github.com/mosoliman517-sudo/football-prediction-model>
+- <https://www.football-data.co.uk/notes.txt>
+- <https://footballproofai.com/research/premier-league-favourite-win-rate>
+- <https://www.sciencedirect.com/science/article/pii/S2590005626003620>
+- <https://arxiv.org/html/2410.21484v1>
+- <https://arxiv.org/html/2309.14807>
+- <https://en.wikipedia.org/wiki/Leakage_(machine_learning)>
+- <https://arxiv.org/abs/2408.08331>
+
+## q23 — Is there credible evidence that deep learning or LLM-based football predictors beat simple statistical models on Premier League outcomes, or is that hype?
+
+**Personas:** skeptic · **Retrieval:** web-search · **Status:** answered
+
+Largely hype for pre-match 1X2. Deep learning vs trees/Poisson: Yeung et al. (Machine Learning 2024) built an Inception/transformer model for the 2023 challenge and it scored RPS 0.2098 vs 0.2085 for a CatBoost + pi-ratings baseline, concluding boosted trees 'matched or surpassed' deep learning; Razali et al. report TabNet at 0.1956 vs CatBoost at 0.1925 on the 2017 data; Fischer & Heuer (arXiv 2408.08331) find a one-hidden-layer network, a random forest and a Poisson model 'perform similarly' across five top leagues with the choice of model and features having 'only a minor influence'. LLMs on the EPL: an August 2026 arXiv harness that uses an LLM (gpt-5.6 class) to rerank exact-score candidates from a Dixon-Coles baseline on the first 150 matches of 2025/26 reports the statistical baseline at 53.3% accuracy, log loss 0.988, RPS 0.2095, while the LLM's score-derived 1X2 pick was 50.0%, the authors stating the baseline 'remains stronger' and flagging possible memorisation of outcomes by a closed-weight model. Tournament benchmarks are the most favourable to LLMs and still show near-parity with the market: LLM-SoccerArena (7 frontier models incl. GPT-5.5, Claude Opus 4.8, Gemini 3.1 Pro; 8,736 forecasts on the 2026 World Cup) finds Brier scores clustered 0.506-0.546 with the best (Gemini, 0.497) statistically indistinguishable from de-vigged bookmaker consensus (0.498), 0.94 mean pairwise correlation between models and no significant differences after correction; WorldCupArena reports Claude Opus 4.7 with search at 70.7% result accuracy vs BetVictor 68.3% and human fans 69.7%, 'only modestly above' baselines and explicitly not generalisable to domestic leagues; the AI World Cup 2026 benchmark (58-64% match accuracy) had no external baseline at all. A 2026 Computational Statistics paper claims 35.8% profit from a neural-network-plus-portfolio strategy over the second half of EPL 2020/21, but that is half a season with no closing-line test. Net: no 2023-2026 study shows an LLM or deep net beating a Poisson/Elo/GBT baseline or de-vigged closing odds on Premier League 1X2 with a proper scoring rule; LLMs are roughly market-level at best, highly correlated with each other, and carry a memorisation risk on any historical backtest.
+
+> **Notes / caveats:** The OSF/SocArXiv preprint 'Predicting football match outcomes using LLMs: a comparative study with traditional ML' could not be read (empty fetch); a search snippet attributed to it claims GPT-4 achieves 'competitive accuracy without extensive training', which conflicts with the arXiv 2608.05030 result and is unverified. ForecastBench (arXiv 2409.19839) is a general forecasting benchmark, not football; the search snippet that GPT-4 failed to beat a naive baseline there is included only as context. The Springer 'How to bet?' article is paywalled; the 35.8% figure comes from the abstract. All LLM benchmarks found are World Cup 2026 studies; none evaluates a full EPL season with proper scoring rules against closing odds.
+
+**Sources:**
+
+- <https://arxiv.org/html/2309.14807>
+- <https://arxiv.org/abs/2408.08331>
+- <https://arxiv.org/html/2608.05030>
+- <https://arxiv.org/html/2607.24573>
+- <https://arxiv.org/html/2607.18084>
+- <https://arxiv.org/html/2608.03416v1>
+- <https://link.springer.com/article/10.1007/s00180-026-01795-7>
+- <https://arxiv.org/abs/2307.13807>
+- <https://osf.io/preprints/socarxiv/e5wpy_v1>
+- <https://arxiv.org/pdf/2409.19839>
+
+## q24 — How well calibrated are common football models and bookmaker-implied probabilities (do they show favourite-longshot bias), and is post-hoc recalibration (Platt/isotonic scaling) used or useful in football forecasting?
+
+**Personas:** adjacent-expert · **Retrieval:** mixed · **Status:** answered
+
+Bookmaker 1X2 odds in football show a measurable but small favourite-longshot bias: Cain, Law & Peel (2000, Scottish J. Pol. Econ. 47(1)) found on English/Scottish 1991/92 league matches roughly 2% losses betting at odds shorter than 1.66 but about 15% losses at odds over 5.00, for both match results and correct scores; Deschamps & Gergaud (2007, 8,377 English matches 2002-06, six bookmakers) found a positive favourite-longshot bias on home and away odds but a NEGATIVE longshot bias on draws (draw bets returned more), so the bias is outcome-specific. Once the overround is removed, odds are usually the best-calibrated forecast available: Strumbelj (2014, IJF) shows Shin-adjusted probabilities beat basic normalisation and regression de-vigging for every bookmaker/sport pair, and regression-based de-vigging is calibrated but has poor resolution; Foulley (arXiv 2106.14345, 384 UEFA Champions League group matches 2017-2020) reports the reliability (miscalibration) component of a Poisson-Elo model's Brier score at only 3.6-4.7% of the uncertainty term, with bookmakers ahead mainly on resolution (home-win resolution 34.5% vs 29.5%; Brier skill 29.5% vs 24.8% home, 27.3% vs 21.2% away) and draws nearly unforecastable by either (skill 1.4-3.0%), with some over-forecasting of home wins and under-forecasting of draws by the model. Wilkens (2026, J. Sports Analytics, 11 Bundesliga seasons 2014/15-2024/25) explicitly applies isotonic regression on a rolling window to an xG-Skellam model and still finds the market better calibrated on Brier (market 0.59 vs model 0.63, summed over outcomes) although the model's summed log-loss was lower (1.25 vs 1.41) and simulated ROI was ~10-15%; FiveThirtyEight's public 'checking our work' page reported its club-soccer forecasts sit close to the calibration line but are 'slightly underconfident in heavy underdogs and slightly overconfident in massive favorites' (overall across all sports/politics, 5,589 events forecast at ~70% occurred 71% of the time and 55,853 events at ~5% occurred 4%). A 2026 Frontiers Bayesian EPL study likewise found home/away probabilities near the diagonal but draws systematically under-estimated at intermediate probabilities. Post-hoc recalibration is therefore used in the literature mainly as isotonic regression (Wilkens 2026) or Platt scaling on ML classifiers (practitioner write-ups such as Andrew Woods' random-forest + Platt scaling); one search summary claimed isotonic significantly beat Platt on Brier and that a 'blending' approach beat Platt scaling on Ignorance/Brier, but I could not locate the primary source for that claim, and I found no football-specific published evaluation of temperature scaling (model-knowledge: it is a one-parameter softmax rescaling that is applicable to 3-way outputs but unstudied here). Net: the calibration gap of well-built goal models vs de-vigged odds is small; the bigger deficit is resolution/sharpness, especially on draws, which recalibration cannot fix.
+
+> **Notes / caveats:** Numbers for Foulley taken from the arXiv PDF text (Table 5 summary and section 3.1). Wilkens numbers (1.25 vs 1.41 log-loss; 0.63 vs 0.59 Brier) come from the SSRN/SAGE abstract via search snippet; the SAGE page itself returned 403. FiveThirtyEight calibration pages now redirect to ABC News; the soccer over/under-confidence quote is from a search snippet of the former checking-our-work page, not re-verified. The 'isotonic beats Platt' and 'blending beats Platt' claims came from search-engine summaries with no identifiable primary URL, so they are flagged as unverified. Temperature scaling: no football source found (model-knowledge only). Disagreement: Wilkens finds the market better calibrated yet the model profitable; Koopman & Lit 2019 (q25) find no results-only model beats bookmakers.
+
+**Sources:**
+
+- <https://ideas.repec.org/a/bla/scotjp/v47y2000i1p25-36.html>
+- <https://www.pinnacle.com/betting-resources/en/betting-strategy/what-is-the-favourite-longshot-bias/vun2u32r85ppf4yp>
+- <https://www.researchgate.net/publication/291191792_Efficiency_in_Betting_Markets_Evidence_From_English_Football>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207014000533>
+- <https://arxiv.org/abs/2106.14345>
+- <https://journals.sagepub.com/doi/10.1177/22150218261416681>
+- <https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5381388>
+- <https://projects.fivethirtyeight.com/checking-our-work/>
+- <https://fivethirtyeight.com/features/when-we-say-70-percent-it-really-means-70-percent>
+- <https://www.frontiersin.org/journals/applied-mathematics-and-statistics/articles/10.3389/fams.2026.1754408/full>
+- <https://andrewwoods1.github.io/WIP_Predicting_RF/>
+- <https://researchonline.lse.ac.uk/id/eprint/111494/3/Wheatcroft_evaluating_probabilistic_forecasts_published.pdf>
+
+## q25 — Does ensembling or model averaging (e.g., combining Poisson, Elo, and market-implied probabilities) improve forecast skill in football, as ensembles do in numerical weather prediction?
+
+**Personas:** adjacent-expert · **Retrieval:** web-search · **Status:** answered
+
+Published evidence says combination helps, but the gains are modest and come mostly from adding market information rather than from NWP-style multi-model averaging. Bookmaker consensus (Leitner, Zeileis & Hornik 2010, IJF): a random-effects model on log-odds from 45 bookmakers with bookmaker fixed effects and overround removal outperformed Elo and FIFA ratings for EURO 2008 (BCM gave Germany 17.45% vs Elo 15.99%; predicted the actual Germany-Spain final at ~20.5%); Kovalchik (2016, JQAS) found the same in tennis, where the bookmaker consensus model reached 72% accuracy vs 70% for the best Elo and none of 11 models beat the odds. Model+odds combination: Egidi, Pauli & Torelli (2018, Statistical Modelling) make each team's Poisson scoring rate a convex combination of a historical-data effect and a Skellam-inverted odds effect (4 leagues, 2007/08-2016/17, seven bookmakers); on average correct 3-way probability the combined model is slightly BELOW de-vigged odds (EPL 0.4349 vs Shin 0.4516 vs basic 0.4480; Bundesliga 0.4010 vs 0.4100; La Liga 0.4553 vs 0.4584; Serie A 0.4430 vs 0.4554) although the authors report positive simulated betting returns. Wunderlich & Memmert (2018, PLOS One, ~14,500 matches 2007-2017) show an Elo updated from pre-match odds (ELO-Odds) beats result- and goal-based Elo; Wheatcroft (2020/2021, J. Sports Analytics) shows adding the odds-implied home probability to predicted match statistics lowers AIC sharply (e.g., -4246.9 to -5750.8 relative to constant-only) and raises profit; Arntzen & Hvattum (2021, Statistical Modelling) find combining Elo team ratings with plus-minus player ratings is 'significantly better than either rating system alone'. Pure model ensembles: in the 2017 Machine Learning Soccer Prediction Challenge (206 held-out matches, 216,743 training matches) the best RPS was 0.2054 (XGBoost + Berrar rating features) vs 0.2063 (XGBoost + pi-ratings, Hubacek et al.), i.e. feature/rating engineering mattered more than averaging; a 2026 Frontiers Bayesian 'outcome-specific ensemble' on 751 EPL matches improved Brier only from 0.195 to 0.193 (accuracy 53.2% to 53.8%) over a single ordered-logit model and never predicted a draw. Counter-evidence: Koopman & Lit (2019, IJF; 6 leagues, 17 seasons) found that with results-only inputs none of nine static/dynamic models beat the bookmaker in a betting simulation (all Table 5 totals negative, roughly -958 to -1199 units), concluding that effort should go to 'more and better explanatory variables rather than better models'. I found no football paper that reports NWP-style skill gains from averaging many structurally different models (Poisson + Elo + ML) with weights; the closest are stacking/weighting proposals (Yao et al. 2018 stacking, cited by the Frontiers paper) and hybrid tournament forecasts (Groll et al. 2021 EURO 2020 hybrid of three ranking methods, without published accuracy figures).
+
+> **Notes / caveats:** Egidi Table 3, Wheatcroft Table 4, Koopman-Lit Tables 3/5 and Leitner figures were read from the downloaded PDF text. The 2017 challenge RPS values (0.2054 / 0.2063) come from a secondary review (arXiv 2403.07669) surfaced in search, not from the Springer editorial (which required login). Conflict: Egidi et al. claim 'high positive returns' from betting with the combined model while their own average-probability metric shows the model slightly below de-vigged odds; Koopman & Lit find no model beats the bookmaker without extra covariates.
+
+**Sources:**
+
+- <https://www.zeileis.org/papers/Leitner+Zeileis+Hornik-2010.pdf>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207009001459>
+- <https://vuir.vu.edu.au/34652/1/jqas-2015-0059.pdf>
+- <https://arxiv.org/abs/1802.08848>
+- <https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0198668>
+- <https://arxiv.org/abs/2001.09097>
+- <https://journals.sagepub.com/doi/abs/10.1177/1471082X20929881>
+- <https://link.springer.com/article/10.1007/s10994-018-5763-8>
+- <https://ida.fel.cvut.cz/papers/hubacek2019learning.html>
+- <https://www.frontiersin.org/journals/applied-mathematics-and-statistics/articles/10.3389/fams.2026.1754408/full>
+- <https://www.sciencedirect.com/science/article/abs/pii/S0169207018302048>
+- <https://research.vu.nl/ws/portalfiles/portal/151597369/Forecasting_football_match_results_in_national_league_competitions_using_scoredriven_time_series_models.pdf>
+- <https://arxiv.org/pdf/2106.05799>
+
+## q26 — How do Bayesian hierarchical football models (Baio-Blangiardo and successors) quantify parameter uncertainty, and does that translate to measurably better probabilistic forecasts than maximum-likelihood Poisson?
+
+**Personas:** adjacent-expert · **Retrieval:** mixed · **Status:** partial
+
+Baio & Blangiardo (2010, J. Applied Statistics 37(2):253-264) model goals as Poisson with log-linear home/away scoring rates built from team attack and defence effects that are exchangeable (hierarchical) across teams in a season; uncertainty is carried as full posterior distributions for every team effect and propagated into a posterior predictive distribution over scorelines, from which W/D/L and league-table probabilities are simulated. They found that plain hierarchical shrinkage 'over-shrinks' extreme teams toward the grand mean and fixed it with a mixture prior on the team effects; fitting was by MCMC in OpenBUGS on Serie A 1991-92 and 2007-08, later moved to INLA 'to speed up the analysis'. Successors report uncertainty as posterior 50%/90% bars on attack/defence parameters and as score heat-maps: Egidi, Pauli & Torelli (2018) fit in Stan with 5,000 iterations (1,000 burn-in) and stress that even the modal scoreline (e.g. Real Madrid-Barcelona 2-1) carries only ~0.08-0.09 posterior probability, i.e. the plots 'acknowledge the large uncertainty of the prediction'; the footBayes R package (Egidi) exposes double/bivariate Poisson, Skellam, zero-inflated Skellam, Student-t and diagonal-inflated models with credible intervals, posterior predictive checks and HMC/ADVI/Pathfinder/Laplace back-ends, and offers MLE (mle_foot) only for static models because 'MLE becomes computationally expensive and less reliable' as dynamic parameters grow. Whether that translates into better probabilistic forecasts than ML Poisson/Dixon-Coles is NOT well established: I found no head-to-head Bayesian-vs-MLE Dixon-Coles out-of-sample RPS/log-loss study; Egidi 2018's Bayesian model scores slightly below de-vigged odds on average correct probability (EPL 0.435 vs 0.452), Ley, Van de Wiele & Van Eetvelde (2019) get competitive RPS from weighted maximum likelihood bivariate/independent Poisson, Koopman & Lit (2019, frequentist score-driven models) show that what moves RPS is DYNAMICS not the estimation paradigm (England ARPS 0.2062 static bivariate Poisson vs 0.1987 dynamic), and the 2026 Frontiers Bayesian EPL study decomposes predictive variance into 0.6% epistemic (parameter) vs 99.4% aleatoric, implying that parameter uncertainty is a negligible share of match-outcome uncertainty once a season of data exists (its main practical benefit is honest shrinkage early in a season and for promoted teams, which is model-knowledge rather than a measured result). Cost: the PyMC reproduction of Baio-Blangiardo model 1 samples 4 chains x (1,000 tune + 1,000 draws) in about 38 s; the Frontiers three-model hierarchical ensemble took 186 s for 24,000 posterior draws (R-hat <= 1.0023, no divergences); Egidi 2018 gives no timing; by contrast Koopman & Lit report <10 s to maximise the likelihood of a score-driven dynamic model versus ~1 hour for the equivalent state-space model, and static ML Poisson fits are effectively instantaneous. For a weekly prediction app, a full-season Stan/PyMC hierarchical fit is therefore a minutes-scale batch job, comfortably feasible once per match week.
+
+> **Notes / caveats:** Partial because no published direct comparison of Bayesian hierarchical vs maximum-likelihood Dixon-Coles forecast skill was found (searches: 'Bayesian versus maximum likelihood Dixon-Coles predictive performance', footBayes timing). The PyMC 38 s figure comes from the PyMC example page as summarised in search results; the Frontiers 186 s and 0.6%/99.4% figures are from the fetched article. The statement about early-season shrinkage benefit is model-knowledge, not a measured result. Egidi 2018 Stan settings (5,000 iterations, 1,000 burn-in) read from the arXiv PDF.
+
+**Sources:**
+
+- <https://gianluca.statistica.it/research/football/>
+- <https://www.tandfonline.com/doi/full/10.1080/02664760802684177>
+- <https://discovery.ucl.ac.uk/16040/>
+- <https://arxiv.org/abs/1802.08848>
+- <https://cran.r-project.org/web/packages/footBayes/vignettes/footBayes_a_rapid_guide.html>
+- <https://arxiv.org/abs/2508.05891>
+- <https://www.pymc.io/projects/examples/en/latest/case_studies/rugby_analytics.html>
+- <https://www.frontiersin.org/journals/applied-mathematics-and-statistics/articles/10.3389/fams.2026.1754408/full>
+- <https://arxiv.org/abs/1705.09575>
+- <https://research.vu.nl/ws/portalfiles/portal/151597369/Forecasting_football_match_results_in_national_league_competitions_using_scoredriven_time_series_models.pdf>
+- <https://pena.lt/y/2021/08/25/predicting-football-results-using-bayesian-statistics-with-python-and-pymc3/>
+
+## q27 — How do established prediction products (Opta supercomputer, former FiveThirtyEight, Forebet, Sky/BBC predictors) present forecasts to users (probabilities, single pick, scoreline) and explain the reasoning, and what do users engage with?
+
+**Personas:** product-owner · **Retrieval:** web-search · **Status:** partial
+
+Presentation formats split cleanly into three styles. (1) Probability-first: Opta Analyst's supercomputer publishes per-match win/draw/loss percentages (e.g. Tottenham 49.5%, Aston Villa 25.8%, draw 24.7% 'across 10,000 pre-match simulations') and season tables with title, top-five and relegation percentages (e.g. Arsenal 38.0% title, Liverpool 48.6% top five, Hull City 38.7% relegation in the 2026-27 preview); its only methodological disclosure is a boiler-plate paragraph that the model 'estimates the probability of each match outcome (win, draw or loss) by using betting market odds and Opta Power Rankings' and simulates the season 10,000 times, which critics call 'silly statistics' and 'no information on how the models work'. The former FiveThirtyEight SPI page (retired June 2023) was the most transparent: per match it showed prob1/probtie/prob2, projected scores, xG, non-shot xG, adjusted goals and a 0-100 'importance' index, plus a ranked list of the ~10 most likely scorelines, backed by a public 'how our club soccer predictions work' article (offensive/defensive ratings = expected goals for/against an average team on a neutral field, four match metrics: goals, adjusted goals, shot xG, non-shot xG) and a public 'checking our work' calibration page; fans valued that it turned gut feel ('90%') into an informed number ('~50% at the City Ground') with an interface updated 'practically the minute every match ended'. Google's 2014 World Cup effort presented a single pick plus a confidence percentage (Brazil 71%, France 69%, Netherlands 68%, Argentina 81%), explained as Opta touch-by-touch data processed in BigQuery with a power ranking and crowd-enthusiasm proxy for home advantage, went 8/8 then 13/15 and was open-sourced. (2) Scoreline-first, human pundits: BBC's Chris Sutton predicts an exact score for all 380 Premier League games each week against a celebrity guest, an 'AI' and readers, scored 10 points for the right result and 40 for the exact score; Sky's Paul Merson column and the free-to-play Sky Super 6 (six exact scorelines, GBP 250,000 jackpot, 'perhaps the biggest' predictor game) likewise use exact scores, i.e. deterministic picks framed as a game. (3) Hybrid: Forebet lists 1X2 percentages alongside a Poisson-derived 'correct score' and average-goals figures for 850+ leagues, but a 2026 review notes 'detailed methodological disclosure is limited' and no season-by-season accuracy tables or calibration curves are published. On trust and engagement the football-specific evidence is thin: Andersson et al. (2015, J. Behavioral Decision Making) had 186 experienced bettors convert odds to frequencies and found their judgments well calibrated overall but unable to consciously adjust for the bookmaker margin; Westwood, Messing & Lelkes (J. Politics) showed experimentally that people given a FiveThirtyEight-style win probability became over-confident (a '90%' read as overwhelming dominance) and disengaged, with Westwood stating 'humans just cannot process probabilities accurately', while Raftery's review argues probabilistic forecasts improve decisions and trust when communicated well. The practical read-across is that percentages plus a most-likely scoreline (the 538/Forebet pattern) satisfy both audiences, and that public methodology and calibration pages were what distinguished the most trusted product.
+
+> **Notes / caveats:** Partial on the 'what users engage with or trust' sub-question: no football-specific UX/engagement study (click-through, retention, or trust survey for match probabilities) was found; the trust evidence is from betting-odds perception (Andersson 2015) and election-forecast experiments (Westwood/Messing/Lelkes). FiveThirtyEight pages now redirect to ABC News and web.archive.org is blocked in this environment, so 538 presentation details rely on the GitHub data README, a retrospective Substack post, and search snippets. Forebet's own FAQ/what-is pages returned 403; description relies on a third-party review and Google Play listing. BBC's scoring rule (10/40 points) and Sutton's 380-game format come from aggregator pages quoting BBC, not bbc.co.uk directly.
+
+**Sources:**
+
+- <https://theanalyst.com/articles/premier-league-match-predictions>
+- <https://theanalyst.com/articles/premier-league-predictions-2026-27-opta-supercomputer>
+- <https://theanalyst.com/articles/opta-football-predictions>
+- <https://www.thefootballweekend.com/p/opta-supercomputer-premier-league-title>
+- <https://fromthebyline.substack.com/p/fivethirtyeight-is-dead-long-live>
+- <https://github.com/fivethirtyeight/data/blob/master/soccer-spi/README.md>
+- <https://fivethirtyeight.com/features/how-our-club-soccer-predictions-work>
+- <https://fivethirtyeight.com/features/the-most-likely-scores-in-the-world-cup-final>
+- <https://projects.fivethirtyeight.com/checking-our-work/>
+- <https://9to5google.com/2014/07/02/attention-compulsive-gamblers-googles-cloud-platform-is-8-for-8-in-world-cup-predictions/>
+- <https://cloudplatform.googleblog.com/2014/07/google-cloud-platform-is-11-for-12-in-World-Cup-predictions.html>
+- <https://github.com/GoogleCloudPlatform/ipython-soccer-predictions>
+- <https://www.betandskill.com/predictions/football/pundits/chris-sutton/>
+- <https://www.thatsagoal.com/football-pundits-predictions-for-today>
+- <https://super6.skysports.com/>
+- <https://www.thepunterspage.com/sky-super-6-tips-predictions/>
+- <https://www.valuethemarkets.com/prediction-markets/forebet-review-how-data-driven-football-forecasts-work-and-their-limits>
+- <https://www.forebet.com/en/what-is-forebet>
+- <https://onlinelibrary.wiley.com/doi/10.1002/bdm.1851>
+- <https://slate.com/news-and-politics/2020/02/study-fivethirtyeight-2016-voter-turnout-decrease-election-forecasts.html>
+- <https://fivethirtyeight.com/features/the-media-has-a-probability-problem/>
+- <https://arxiv.org/pdf/1408.4812>
+
+## q28 — How should the app derive a displayed 'predicted result' or scoreline from outcome probabilities for a full matchweek, so that the user-perceived hit rate is fair (including whether to ever predict draws), and what user-facing scoring metric should it report?
+
+**Personas:** product-owner, newcomer · **Retrieval:** mixed · **Status:** answered
+
+Picking the argmax (modal) outcome per match maximises expected 1X2 accuracy but almost never yields a draw: a June 2026 Towards Data Science write-up reports its selected model 'correctly predicted only 2 draws out of 1,784 actual draws, for draw recall of 0.11%', because the draw probability rarely exceeds both win probabilities even when it is 25-30%; plain Poisson models also under-produce draws, which is why the Dixon-Coles (1997) correction inflates 0-0/1-0/0-1/1-1. Sources disagree with the '~23%' premise: Statista shows the lowest PL draw share was 18.7% (2018/19) and 2024/25 was running at ~30% as of 15 Oct 2024, so the share varies roughly 19-30% by season. For a displayed scoreline, the mode of the score matrix (most likely exact score, often 1-1 or 1-0) differs from rounding expected goals; rounding is less principled but a general Poisson-forecasting analysis found rounding the mean empirically beats using the mode, and Forebet's product convention is to show the max-probability 1/X/2 plus a separate most-probable correct score. A fair approach is to show the argmax result for the headline pick (expected hit rate ~50-55% for bookmaker-quality probabilities; exact figure not retrieved), display the draw probability alongside so users see when it is high, and score the app on a proper scoring rule rather than hit rate. Product convention favours Super 6-style points (5 for correct score, 2 for correct result, max 30 per 6-match round) or Superbru-style (3 exact, 1.5 correct result and 'close' by its Closeness Index, 1 correct result only; Superbru adopted this as 1 + 0.5 close / +2 exact in March 2018), while the research literature evaluates probabilistic forecasts with RPS (Constantinou & Fenton) or Brier; Wheatcroft (JQAS 2021, arXiv 1908.08980) argues the ignorance (log) score outperforms both RPS and Brier for football, so if one probabilistic metric is shown, Brier (0 = perfect, 0.667 max for 3-way) is most explainable but log-loss/RPS are defensible alternatives.
+
+> **Notes / caveats:** Superbru's exact Closeness Index formula is only documented on third-party sites (kickoffbrief.co.uk: CI = (your GD - actual GD) + (your total goals - actual total goals)/2); Superbru's own pages only say 'one goal away' counts as close and 1-1 is close to 0-0 and 2-2. The rounding-vs-mode finding (arXiv 2312.01966) is from spike-count prediction, not football, and is used analogically. A bookmaker-favourite hit-rate figure for the PL was not found in a primary source; the ~50-55% band is model-knowledge. The Glicko-2 paper (arXiv 2607.01722) that mentions an ordered-logit draw model has been withdrawn.
+
+**Sources:**
+
+- <https://towardsdatascience.com/can-machine-learning-predict-the-world-cup/>
+- <https://statsultra.com/dixon-coles-model/>
+- <https://www.statista.com/statistics/1498537/premier-league-draws/>
+- <https://arxiv.org/pdf/2312.01966>
+- <https://gambeta.ai/us/blog/what-is-forebet>
+- <https://super6.skysports.com/faq>
+- <https://www.superbru.com/premierleague_predictor/how_to_play.php>
+- <https://www.superbru.com/news/football-scoring-survey-results>
+- <https://www.superbru.com/news/proposed-new-scoring-system-for-football-predictor-games>
+- <https://arxiv.org/abs/1908.08980>
+- <https://www.eecs.qmul.ac.uk/~norman/papers/evaluating_predictive_accuracy_football.pdf>
+
+## q29 — What are the legal and regulatory considerations for a football prediction app in the UK and US: is it a gambling product, and what rules apply to bookmaker affiliate links and tipster-style advertising?
+
+**Personas:** product-owner · **Retrieval:** web-search · **Status:** answered
+
+UK: under the Gambling Act 2005, s.9 defines betting as a bet on the outcome of a race/competition/event, and s.11 deems a prediction competition to be betting only where participants 'are required to pay to participate' and win a prize for accurate guesses (guessing 'includes ... predicting using skill or judgment'); a free-to-enter prediction app with or without prizes is therefore a prize competition/free draw, and the Gambling Commission states 'You do not need a licence or permission to run a free draw or prize competition as long as they are being ran in a way that meets the requirements of the Gambling Act 2005'. Adding a paid entry (including premium-rate texts) with prizes converts it into pool betting requiring a UKGC betting licence unless a genuinely free route that is 'no more expensive and ... no less convenient than the paid route' and 'promoted and displayed at the same level' is offered (Sky Super 6 is run free, 18+, UK/IoM/CI/ROI residents only, by licensed Sky Betting and Gaming). Affiliate/tipster marketing: affiliates are not licensed, but LCCP SR code 1.1.2 makes operators responsible for third parties' conduct; a UKGC notice (1 July 2019, effective 7 May 2019) requires age verification before free-to-play games are accessible via affiliates; CAP Code section 16 applies to affiliates 'acting on an advertiser's behalf', rule 16.3.12 (from 1 Oct 2022) bans gambling ads with 'strong appeal' to under-18s (e.g. top-flight footballers), 16.3.13 bars targeting under-18s via media selection, and CAP says it 'may draw on the principles' of section 16 for tipster ads under the general social-responsibility rules; section 8 (8.17 significant conditions, 8.19-8.29 prize promotions) governs any prize promotion. US: gambling requires prize + chance + consideration, so a no-purchase free-to-play contest generally falls under sweepstakes/promotion law rather than gambling (Florida requires registration and bonding for prize pools over $5,000; New York and Rhode Island have similar registration rules); paid-entry prediction contests are treated as fantasy/pick'em contests, which UIGEA (31 U.S.C. 5362) exempts only if prizes are fixed in advance and outcomes reflect skill across multiple real-world events, but states decide: Hawaii, Idaho, Montana, Nevada, Washington prohibit paid DFS, Florida's Gaming Control Commission ordered PrizePicks to stop pick'em games in Feb 2024, and California's AG has called pick'em contests illegal sports gambling. App stores: Apple guideline 5.3.1-5.3.2 require sweepstakes/contests to be sponsored by the developer with official rules in-app disclaiming Apple, 5.3.3 bans IAP for real-money gaming credit, and 5.3.4 requires licensing, geo-restriction and free download for real-money gaming; Google Play's Real-Money Gambling, Games, and Contests policy permits licensed sportsbooks/DFS only via an application process with geofencing, age-blocking (enforced 28 Jan 2026), and no Play Billing, and it separately prohibits unapproved apps that 'promote or direct users to' gambling services or provide gambling 'companion functionality', which is the main risk for bookmaker affiliate links in a prediction app.
+
+> **Notes / caveats:** Conflict: Wikipedia's 'Prediction game' article claims free prediction games are 'legal in all fifty United States'; more careful sources say free contests still trigger state sweepstakes registration/bonding and that a few states treat even skill contests strictly, so that blanket claim should not be relied on. UKGC has no bespoke 'prediction app' guidance beyond the free draws/prize competitions page and s.11 of the Act; the Super 6 T&C clauses (void fixtures, 18+, residency) were captured via search snippets of super6.skysports.com/terms rather than a full page fetch. Apple's guidelines do not state a specific age rating for gambling content; that is set via the App Store Connect questionnaire (guideline 2.3.6).
+
+**Sources:**
+
+- <https://www.legislation.gov.uk/ukpga/2005/19/part/1>
+- <https://www.legislation.gov.uk/ukpga/2005/19/notes/division/5/3/1/11?view=plain>
+- <https://www.gamblingcommission.gov.uk/public-and-players/guide/page/free-draws-and-prize-competitions>
+- <https://www.gamblingcommission.gov.uk/news/article/free-to-play-games-being-available-through-gambling-affiliates>
+- <https://www.gamblingcommission.gov.uk/licensees-and-businesses/lccp/condition/1-1-2-responsibility-for-third-parties-all-licences>
+- <https://super6.skysports.com/terms>
+- <https://www.asa.org.uk/type/non_broadcast/code_section/16.html>
+- <https://www.asa.org.uk/resource/enforcement-notice-gambling-ads-with-strong-appeal-to-under-18s.html>
+- <https://www.asa.org.uk/type/non_broadcast/code_section/08.html>
+- <https://www.asa.org.uk/advice-online/promotional-marketing-free-entry-routes.html>
+- <https://www.congress.gov/crs-product/R44398>
+- <https://moritzlaw.osu.edu/sites/default/files/2022-06/14.EdelmanHoldenWandt_v83-1_pp117-156.pdf>
+- <https://www.superlawyers.com/resources/gaming/pickem-dfs-legality/>
+- <https://en.wikipedia.org/wiki/PrizePicks>
+- <https://escalon.services/blog/smb/offering-a-contest-know-these-laws>
+- <https://developer.apple.com/app-store/review/guidelines/>
+- <https://support.google.com/googleplay/android-developer/answer/9877032?hl=en>
+
+## q30 — How should a 'matchweek' be defined operationally given midweek rounds, cup fixtures, postponements, and international breaks, and how do existing products handle this?
+
+**Personas:** product-owner · **Retrieval:** mixed · **Status:** partial
+
+The Premier League schedules each season as 38 numbered match rounds, '33 weekends and five midweek match rounds' in both 2025/26 and 2026/27, with the festive rule that 'no two rounds [take] place within 60 hours of each other'; premierleague.com labels every fixture with a Matchweek (e.g. /matches/premier-league/2025-26/matchweek-38) and a postponed match keeps its original matchweek number even when replayed months later, so 'matchweek N' is a fixture-list label, not a calendar week. 2025/26 ran 15 Aug 2025 to 24 May 2026 with international breaks 1-9 Sep, 6-14 Oct, 10-18 Nov and 23-31 Mar (plus AFCON 21 Dec-18 Jan), and midweek rounds including MW14 (Tue 2-Thu 4 Dec) and MW26 (Tue 10-Thu 12 Feb). 2026/27 runs Fri 21 Aug 2026 (Arsenal v Coventry) to Sun 30 May 2027 (fixtures released 19 Jun 2026), with the September and October windows merged into one 16-day break (21 Sep-6 Oct, between MW5 and MW6), then 9-17 Nov (MW10/11) and 22-30 Mar (MW30/31); midweek rounds reported so far are MW13 (Wed 2 Dec, all ten games 20:00), MW18 (29-30 Dec), MW25 (9-10 Feb) and MW29 (2-3 Mar), with the fifth not confirmed. Products handle disruption differently: FPL defines a Gameweek by a deadline '90 minutes before the kick-off time in the first match of the Gameweek' (not changed within 24 hours of the scheduled time) and moves rearranged fixtures into whichever Gameweek window they land in, producing Blank and Double Gameweeks (typically blanks around FA Cup R5/QF/SF between GW28-GW34 and doubles GW34-GW37); Super 6 uses a curated six-fixture round (not the whole matchweek) and voids any fixture 'postponed, abandoned or not completed (where less than 90 mins is played)', cutting the jackpot to GBP20,000 with five completed fixtures, GBP5,000 with four, and voiding it with three or fewer; Superbru keeps the round structure and marks games 'postponed', sometimes parking a round months later with placeholder dates until a real date is known. Operationally the app should key each fixture to (season, official matchweek number, fixture id), define the user-facing 'matchweek' window as [first kick-off of that matchweek's original fixtures, last kick-off], and treat rescheduled games as belonging to their original matchweek for scoring while surfacing them in the calendar week they are played. On APIs: the Premier League publishes no documented public API, but premierleague.com is driven by the Pulselive feed (footballapi.pulselive.com/football/fixtures?comps=1&compSeasons=...) whose fixture objects carry gameweek.gameweek and gameweek.compSeason.id (community-documented, unsupported); the official FPL API (fantasy.premierleague.com/api/bootstrap-static/ 'events' and /api/fixtures/?event=N) exposes Gameweek numbers that diverge from matchweeks after rescheduling; third-party feeds such as football-data.org expose a 'matchday' field.
+
+> **Notes / caveats:** The claim that postponed fixtures retain their original matchweek label on premierleague.com is model-knowledge (the fixtures FAQ does not state it explicitly). The 2026/27 midweek matchweek numbers came from a search summary of the PL fixture article; the article fetch confirmed MW13 on Wed 2 Dec and 29-30 Dec midweek games but I could not confirm the fifth midweek round (2025/26 fifth midweek round also unconfirmed). Minor date conflict: Tottenham's key-dates page says the 2026/27 season starts Sat 22 Aug, while premierleague.com/Wikipedia give Fri 21 Aug (a Friday-night opener). Pulselive field names come from community wrappers, not official documentation.
+
+**Sources:**
+
+- <https://www.premierleague.com/en/news/4171848>
+- <https://www.premierleague.com/en/about/faq/fixtures>
+- <https://www.premierleague.com/en/matches/premier-league/2025-26/matchweek-38>
+- <https://en.wikipedia.org/wiki/2025%E2%80%9326_Premier_League>
+- <https://www.premierleague.com/en/news/4324539/all-380-fixtures-for-202526-premier-league-season>
+- <https://www.premierleague.com/en/news/4675097/all-380-fixtures-for-202627-premier-league-season>
+- <https://www.premierleague.com/en/news/4689113/when-are-the-international-breaks-for-202627>
+- <https://en.wikipedia.org/wiki/2026%E2%80%9327_Premier_League>
+- <https://www.tottenhamhotspur.com/news/1070135/premier-league-key-dates-2026-27>
+- <https://fantasy.premierleague.com/help/rules>
+- <https://www.premierleague.com/en/news/4536133/how-domestic-cup-ties-cause-blank-and-double-gameweeks-in-fpl>
+- <https://bawler.ai/fpl/double-gameweeks>
+- <https://super6.skysports.com/terms>
+- <https://www.superbru.com/news/the-impact-of-covid-19-on-superbru>
+- <https://github.com/ghurone/premier-league-data>
+- <https://lajh87.gitlab.io/pulseliver/>
+- <https://medium.com/@frenzelts/fantasy-premier-league-api-endpoints-a-detailed-guide-acbd5598eb19>
+- <https://www.football-data.org/documentation/api>
