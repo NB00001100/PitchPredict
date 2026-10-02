@@ -4,7 +4,8 @@
  */
 import { useMemo, type CSSProperties } from 'react'
 import { Link } from 'react-router'
-import { fixtureView } from '../../lib/fixtureView'
+import { fixtureView, type FixtureView, type ForecastView } from '../../lib/fixtureView'
+import { fixturePhase } from '../../lib/matchweek'
 import { forecastOf } from '../../lib/probability'
 import { currentMatchweek, hitRate } from '../../lib/selectors'
 import type { Fixture } from '../../lib/types'
@@ -13,17 +14,24 @@ import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion'
 import { CountUp } from '../CountUp'
 import { Panel } from '../Panel'
 import { PointerLight } from '../PointerLight'
+import { PredictedZone } from '../PredictedActual'
 import { ProbabilityBar } from '../ProbabilityBar'
 import { Tag } from '../Tag'
 import { TeamMonogram } from '../TeamMonogram'
 import { StatCard, StatCardSkeleton } from '../StatCard'
 import { FeaturedSkeleton, TickerSkeleton } from './TickerShell'
 
-const KICKOFF = new Intl.DateTimeFormat('en-GB', {
+/** "Sat 11:30" in the viewer's locale and time zone, like the fixture pages. */
+const KICKOFF = new Intl.DateTimeFormat(undefined, {
   weekday: 'short',
   hour: '2-digit',
   minute: '2-digit',
 })
+
+/** Nothing left to play: every fixture finished or cancelled. */
+function seasonOver(fixtures: readonly Fixture[]): boolean {
+  return fixtures.length > 0 && fixtures.every((f) => f.status === 'FINISHED' || f.status === 'CANCELLED')
+}
 
 /* ---------- This week's forecasts ticker ---------- */
 
@@ -37,12 +45,36 @@ export function ForecastTicker() {
   }, [fixtures])
 
   if (status === 'loading') return <TickerSkeleton />
-  // On error, or with nothing forecast yet, the strip simply isn't shown.
-  if (status === 'error' || !week) return null
+  // On error, or with nothing forecast yet, the strip keeps its place and says why.
+  if (status === 'error') return <TickerNotice>This week’s forecasts couldn’t be loaded just now.</TickerNotice>
+  if (!week) return <TickerNotice>Forecasts for the next matchweek aren’t out yet.</TickerNotice>
   return <Ticker matchweek={week.matchweek} fixtures={week.fixtures} />
 }
 
+/** The ticker's footprint with a one-line message and the way to the forecasts page. */
+function TickerNotice({ children }: { children: string }) {
+  return (
+    <section aria-labelledby="ticker-title" className="glass relative flex h-20 items-stretch overflow-hidden rounded-2xl">
+      <div className="relative z-10 flex shrink-0 flex-col justify-center border-r border-hairline bg-black/70 px-3 py-3 sm:px-5">
+        <h2 id="ticker-title" className="type-eyebrow text-grey-200">
+          This week
+        </h2>
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col items-start justify-center gap-1 px-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+        <p className="min-w-0 text-[0.82rem] leading-snug text-grey-200 sm:text-sm">{children}</p>
+        <Link
+          to="/premier-league"
+          className="inline-flex shrink-0 items-center gap-1.5 font-wide text-[0.62rem] font-semibold tracking-[0.14em] whitespace-nowrap text-white uppercase underline-offset-4 hover:text-pitch hover:underline"
+        >
+          Open the forecasts <span aria-hidden="true">→</span>
+        </Link>
+      </div>
+    </section>
+  )
+}
+
 function Ticker({ matchweek, fixtures }: { matchweek: number; fixtures: Fixture[] }) {
+  const to = `/premier-league?mw=${matchweek}`
   const reduced = usePrefersReducedMotion()
   // ~5s per fixture keeps reading speed comfortable whatever the count.
   const duration = `${Math.max(30, fixtures.length * 5)}s`
@@ -69,7 +101,7 @@ function Ticker({ matchweek, fixtures }: { matchweek: number; fixtures: Fixture[
       {reduced ? (
         <ul className="flex min-w-0 snap-x overflow-x-auto [scrollbar-width:none]">
           {fixtures.map((f) => (
-            <TickerItem key={f.fixture_id} fixture={f} />
+            <TickerItem key={f.fixture_id} fixture={f} to={to} />
           ))}
         </ul>
       ) : (
@@ -80,13 +112,13 @@ function Ticker({ matchweek, fixtures }: { matchweek: number; fixtures: Fixture[
           >
             <ul className="flex">
               {fixtures.map((f) => (
-                <TickerItem key={f.fixture_id} fixture={f} />
+                <TickerItem key={f.fixture_id} fixture={f} to={to} />
               ))}
             </ul>
             {/* A second copy makes the loop seamless; it is hidden from assistive tech and the tab order. */}
             <ul className="flex" aria-hidden="true" inert>
               {fixtures.map((f) => (
-                <TickerItem key={f.fixture_id} fixture={f} />
+                <TickerItem key={f.fixture_id} fixture={f} to={to} />
               ))}
             </ul>
           </div>
@@ -96,14 +128,25 @@ function Ticker({ matchweek, fixtures }: { matchweek: number; fixtures: Fixture[
   )
 }
 
-function TickerItem({ fixture }: { fixture: Fixture }) {
+/** What the ticker says about when or how a match stands: kick-off, live, full time or why it isn't on. */
+function tickerWhen(fixture: Fixture): string {
+  const phase = fixturePhase(fixture)
+  if (phase === 'finished') return fixture.home_goals !== null && fixture.away_goals !== null ? `FT ${fixture.home_goals}–${fixture.away_goals}` : 'FT'
+  if (phase === 'live') return 'Live'
+  if (phase === 'postponed') return 'Postponed'
+  if (phase === 'suspended') return 'Suspended'
+  if (phase === 'cancelled') return 'Cancelled'
+  return fixture.kickoff ? KICKOFF.format(new Date(fixture.kickoff)) : ''
+}
+
+function TickerItem({ fixture, to }: { fixture: Fixture; to: string }) {
   const forecast = forecastOf(fixture)
   if (!forecast) return null
-  const kickoff = fixture.kickoff ? KICKOFF.format(new Date(fixture.kickoff)) : ''
+  const kickoff = tickerWhen(fixture)
   return (
     <li className="shrink-0 snap-start border-r border-hairline">
       <Link
-        to="/premier-league"
+        to={to}
         className="group/item flex h-full w-[15.5rem] flex-col justify-center gap-2 px-5 py-3 transition-colors duration-200 hover:bg-glass-strong focus-visible:-outline-offset-2"
       >
         <span className="flex items-baseline justify-between gap-2">
@@ -112,7 +155,7 @@ function TickerItem({ fixture }: { fixture: Fixture }) {
             <span className="px-1.5 font-sans text-xs font-normal text-grey-500">v</span>
             {fixture.away_tla}
           </span>
-          <span className="type-label text-[0.65rem] text-grey-400">{kickoff}</span>
+          <span className="type-label text-[0.65rem] whitespace-nowrap text-grey-400">{kickoff}</span>
         </span>
         <ProbabilityBar
           forecast={forecast}
@@ -134,14 +177,24 @@ export function SeasonRecord() {
   const { status, fixtures } = useFixtures()
   const graded = useMemo(() => fixtures.filter((f) => f.hit !== null).map((f) => f.hit === true), [fixtures])
   const rate = useMemo(() => hitRate(fixtures), [fixtures])
+  const backtested = useMemo(() => fixtures.filter((f) => f.hit !== null && f.is_backfill === true).length, [fixtures])
 
   if (status === 'loading') return <StatCardSkeleton label={SEASON_LABEL} />
-  if (status === 'error' || rate.pct === null) {
+  if (status === 'error') {
     return (
       <StatCard
         label={SEASON_LABEL}
         value="—"
         caption="The live record couldn’t be loaded just now. The Premier League page shows every graded pick."
+      />
+    )
+  }
+  if (rate.pct === null) {
+    return (
+      <StatCard
+        label={SEASON_LABEL}
+        value="—"
+        caption="No picks graded yet. The record starts counting with the first match played."
       />
     )
   }
@@ -152,7 +205,18 @@ export function SeasonRecord() {
       caption={
         <>
           of this season’s picks were right: <strong className="font-semibold text-white">{rate.hits}</strong> of{' '}
-          {rate.total} graded so far.
+          {rate.total} graded so far
+          {backtested > 0 ? (
+            <>
+              {' '}
+              ({backtested === rate.total ? 'all' : backtested}{' '}
+              <Link to="/about#backtested" className="underline decoration-grey-500 underline-offset-[0.2em] hover:text-pitch">
+                backtested
+              </Link>
+              )
+            </>
+          ) : null}
+          .
         </>
       }
     >
@@ -198,6 +262,7 @@ export function PremierLeagueDetail() {
     if (mw === null) return null
     const forecasts = fixtures.filter((f) => f.matchweek === mw && forecastOf(f) !== null).length
     const rate = hitRate(fixtures)
+    if (seasonOver(fixtures)) return `Season complete · ${rate.hits} of ${rate.total} right`
     const parts = [`Matchweek ${mw}`, `${forecasts} forecast${forecasts === 1 ? '' : 's'}`]
     if (rate.total) parts.push(`${rate.hits} of ${rate.total} right this season`)
     return parts.join(' · ')
@@ -207,12 +272,18 @@ export function PremierLeagueDetail() {
   return <>{status === 'ready' && line ? line : 'Forecasts and results, matchweek by matchweek'}</>
 }
 
-/* ---------- Hero: the week's most confident call ---------- */
+/* ---------- Hero: the week's most confident forecast ---------- */
+
+/** The hero card's fixed height: skeleton, card and fallback all take it, so the hero never jumps. */
+const FEATURED_HEIGHT = 'h-[31rem]'
 
 /**
- * The upcoming fixture this week where the model's pick is most confident:
- * a product glimpse in the hero. Shows only the forecast (it is before
- * kick-off), labelled as a prediction.
+ * The fixture still to be played this matchweek where the model's pick is
+ * most confident: a product glimpse in the hero. It is a forecast, not a tip,
+ * and the card says so in numbers: the pick's chance, and what's left for the
+ * other two results. Shows only the forecast (it is before or during the
+ * match). With nothing to feature, or on a failed load, a card of the same
+ * size explains and links to the forecasts.
  */
 export function FeaturedForecast() {
   const { status, fixtures } = useFixtures()
@@ -234,36 +305,63 @@ export function FeaturedForecast() {
   }, [fixtures])
 
   if (status === 'loading') return <FeaturedSkeleton />
-  if (status === 'error' || !featured?.forecast) return null
-  const { fixture, forecast } = featured
+  if (status === 'error') return <FeaturedFallback title="Forecasts unavailable" body="This week’s forecasts couldn’t be loaded just now. The forecasts page will try again." />
+  if (!featured?.forecast && seasonOver(fixtures)) {
+    return (
+      <FeaturedFallback
+        title="Season complete"
+        body="Every match of the season has been played and graded. The model’s most confident forecast returns with the next season’s first matchweek."
+      />
+    )
+  }
+  if (!featured?.forecast) {
+    return (
+      <FeaturedFallback
+        title="No forecast to feature yet"
+        body="The model’s most confident forecast of the week appears here once forecasts for the next matchweek are published, a few days before kick-off."
+      />
+    )
+  }
+  return <FeaturedCard key={featured.fixture.fixture_id} view={featured} forecast={featured.forecast} />
+}
+
+function FeaturedCard({ view, forecast }: { view: FixtureView; forecast: ForecastView }) {
+  const { fixture, phase } = view
   const pickPct = forecast.percents[forecast.pick]
+  const rest = 100 - pickPct
   return (
-    <Panel as="article" aria-labelledby="featured-title" className="flex flex-col gap-6 p-6">
+    <Panel as="article" aria-labelledby="featured-title" className={`flex ${FEATURED_HEIGHT} flex-col gap-5 p-6`}>
       <PointerLight />
-      <div className="flex items-center justify-between gap-3">
-        <Tag tone="live">Matchweek {fixture.matchweek} · Top call</Tag>
-        <span className="type-label text-[0.68rem] text-grey-400">
-          {fixture.kickoff ? KICKOFF.format(new Date(fixture.kickoff)) : ''}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <Tag tone="accent" icon={null}>
+          Matchweek {fixture.matchweek} · Most confident
+        </Tag>
+        {phase === 'live' ? (
+          <Tag tone="live">Live</Tag>
+        ) : (
+          <time dateTime={fixture.kickoff} className="type-label shrink-0 text-[0.68rem] whitespace-nowrap text-grey-400">
+            {fixture.kickoff ? KICKOFF.format(new Date(fixture.kickoff)) : ''}
+          </time>
+        )}
       </div>
       <h2 id="featured-title" className="flex flex-col gap-3">
         {[
           [fixture.home_tla, fixture.home_team, 'Home'],
           [fixture.away_tla, fixture.away_team, 'Away'],
-        ].map(([tla, name, side]) => (
-          <span key={side} className="flex items-center gap-3">
+        ].map(([tla, name, side], i) => (
+          <span key={side} className="flex min-w-0 items-center gap-3">
             <TeamMonogram tla={tla} />
-            <span className="type-title">{name}</span>
-            <span className="type-label ml-auto text-[0.62rem] text-grey-500">{side}</span>
+            <span className="type-title min-w-0 truncate">{name}</span>
+            {i === 0 ? <span className="sr-only"> versus </span> : null}
+            <span aria-hidden="true" className="type-label ml-auto text-[0.62rem] text-grey-500">
+              {side}
+            </span>
           </span>
         ))}
       </h2>
-      <div className="flex flex-col gap-3 rounded-xl border border-hairline bg-glass p-4">
-        <p className="type-label text-[0.65rem] text-grey-400">
-          Predicted <span className="text-grey-500">· Before kick-off</span>
-        </p>
+      <PredictedZone aside={forecast.backtested ? <Tag icon={null}>Backtested</Tag> : null}>
         <p className="flex items-baseline justify-between gap-3">
-          <span className="text-base font-medium">{forecast.pickLabel}</span>
+          <span className="text-base font-medium text-white">{forecast.pickLabel}</span>
           <span className="type-stat text-[2.75rem] text-pitch">{pickPct}%</span>
         </p>
         <ProbabilityBar forecast={forecast.shares} homeName={fixture.home_team} awayName={fixture.away_team} />
@@ -273,10 +371,42 @@ export function FeaturedForecast() {
             <span className="font-mono text-white">{forecast.likeliestScore}</span>
           </p>
         ) : null}
+      </PredictedZone>
+      <p className="text-[0.8rem] leading-snug text-grey-400">
+        The model’s most confident forecast this matchweek, not a tip: it still gives the other results{' '}
+        <span className="font-mono text-grey-200">{rest}%</span>.
+      </p>
+      <Link
+        to={`/premier-league?mw=${fixture.matchweek}`}
+        className="group/f mt-auto inline-flex items-center gap-2 self-start font-wide text-[0.66rem] font-semibold tracking-[0.14em] text-grey-200 uppercase hover:text-pitch"
+      >
+        All matchweek {fixture.matchweek} forecasts
+        <span aria-hidden="true" className="transition-transform duration-300 group-hover/f:translate-x-1">
+          →
+        </span>
+      </Link>
+    </Panel>
+  )
+}
+
+function FeaturedFallback({ title, body }: { title: string; body: string }) {
+  return (
+    <Panel as="article" aria-labelledby="featured-title" className={`flex ${FEATURED_HEIGHT} flex-col gap-5 p-6`}>
+      <Tag icon={null} className="self-start">This week</Tag>
+      <div className="flex flex-1 flex-col justify-center gap-3">
+        <h2 id="featured-title" className="type-title">
+          {title}
+        </h2>
+        <p className="text-sm leading-relaxed text-grey-200">{body}</p>
       </div>
-      <Link to="/premier-league" className="group/f inline-flex items-center gap-2 self-start font-wide text-[0.66rem] font-semibold tracking-[0.14em] text-grey-200 uppercase hover:text-pitch">
-        All {fixture.matchweek ? `matchweek ${fixture.matchweek}` : ''} forecasts
-        <span aria-hidden="true" className="transition-transform duration-300 group-hover/f:translate-x-1">→</span>
+      <Link
+        to="/premier-league"
+        className="group/f inline-flex items-center gap-2 self-start font-wide text-[0.66rem] font-semibold tracking-[0.14em] text-grey-200 uppercase hover:text-pitch"
+      >
+        Open the forecasts
+        <span aria-hidden="true" className="transition-transform duration-300 group-hover/f:translate-x-1">
+          →
+        </span>
       </Link>
     </Panel>
   )

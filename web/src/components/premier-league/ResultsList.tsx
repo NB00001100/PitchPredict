@@ -1,16 +1,18 @@
 import * as m from 'motion/react-m'
-import type { ReactNode } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import { formatDateRange } from '../../lib/dates'
 import { EASE_OUT_EXPO } from '../../lib/motion'
 import { RESULT_WORD, type ResultRow } from '../../lib/results'
+import { useMediaQuery } from '../../lib/useMediaQuery'
 import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion'
 import { Panel } from '../Panel'
 import { PointerLight } from '../PointerLight'
+import { ActualZone, PredictedZone, VerdictZone, ZoneLabel } from '../PredictedActual'
 import { TeamMonogram } from '../TeamMonogram'
-import { Score, Teams, VerdictShell } from './FixtureCard'
+import { BacktestedTag } from './Backtested'
+import { Score, Teams } from './FixtureCard'
 import { ProbabilityBar } from './ProbabilityBar'
 import { CallLabel, CorrectMark, ExactScoreMark, Scoreline } from './ResultParts'
-import { ZoneLabel } from './ZoneLabel'
 
 interface Group {
   matchweek: number
@@ -29,33 +31,45 @@ function groupRows(rows: readonly ResultRow[]): Group[] {
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
 
+/** Where the ledger table takes over from the cards (Tailwind's `xl`). */
+const WIDE = '(min-width: 1280px)'
+
+/** Only the first rows of the list rise in; the rest (a full season is 380) render plain and cheap. */
+const ANIMATED_ROWS = 20
+
 /**
  * The rows on screen, grouped by matchweek (newest first). Wide screens get a
  * ledger table whose Predicted and Actual column groups wear the two voices;
- * narrower screens get one card per match with the same zones stacked.
+ * narrower screens get one card per match with the same zones stacked. Only
+ * one of the two is rendered, and matchweek groups below the fold skip
+ * layout and paint until scrolled near (`content-visibility`).
  */
-export function ResultsList({ rows }: { rows: readonly ResultRow[] }) {
-  const groups = groupRows(rows)
+export const ResultsList = memo(function ResultsList({ rows }: { rows: readonly ResultRow[] }) {
+  const groups = useMemo(() => groupRows(rows), [rows])
+  const wide = useMediaQuery(WIDE)
+  if (wide) return <ResultsTable groups={groups} />
+  let seen = 0
   return (
-    <>
-      <ResultsTable groups={groups} />
-      <div className="flex flex-col gap-10 xl:hidden">
-        {groups.map((g) => (
-          <section key={g.matchweek} aria-labelledby={`results-mw-${g.matchweek}`}>
-            <GroupHeading id={`results-mw-${g.matchweek}`} group={g} />
-            <ul className="mt-4 grid gap-3 md:grid-cols-2">
-              {g.rows.map((row, i) => (
-                <Rise key={row.fixture.fixture_id} as="li" index={i}>
-                  <ResultCard row={row} />
-                </Rise>
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
-    </>
+    <div className="flex flex-col gap-10">
+      {groups.map((g) => (
+        <section
+          key={g.matchweek}
+          aria-labelledby={`results-mw-${g.matchweek}`}
+          className="[contain-intrinsic-size:auto_1800px] [content-visibility:auto] md:[contain-intrinsic-size:auto_900px]"
+        >
+          <GroupHeading id={`results-mw-${g.matchweek}`} group={g} />
+          <ul className="mt-4 grid gap-3 md:grid-cols-2">
+            {g.rows.map((row) => (
+              <Rise key={row.fixture.fixture_id} as="li" index={seen++}>
+                <ResultCard row={row} />
+              </Rise>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
   )
-}
+})
 
 function GroupHeading({ id, group, as: Tag = 'h3' }: { id?: string; group: Group; as?: 'h3' | 'span' }) {
   const hits = group.rows.filter((r) => r.correct).length
@@ -74,10 +88,14 @@ function GroupHeading({ id, group, as: Tag = 'h3' }: { id?: string; group: Group
 
 function Rise({ as, index, children }: { as: 'li' | 'tr'; index: number; children: ReactNode }) {
   const reduced = usePrefersReducedMotion()
+  if (reduced || index >= ANIMATED_ROWS) {
+    const Plain = as
+    return <Plain>{children}</Plain>
+  }
   const Component = as === 'li' ? m.li : m.tr
   return (
     <Component
-      initial={reduced ? false : { opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.45, ease: EASE_OUT_EXPO, delay: Math.min(index * 0.03, 0.35) }}
     >
@@ -92,8 +110,14 @@ const PRED_CELL = 'bg-[rgb(150_200_255/0.035)] border-y border-dashed border-[rg
 const ACT_CELL = 'bg-grey-800 border-y border-hairline-strong'
 
 function ResultsTable({ groups }: { groups: Group[] }) {
+  const offsets: number[] = []
+  let n = 0
+  for (const g of groups) {
+    offsets.push(n)
+    n += g.rows.length
+  }
   return (
-    <table className="hidden w-full table-fixed border-separate border-spacing-x-0 border-spacing-y-1.5 text-left xl:table">
+    <table className="w-full table-fixed border-separate border-spacing-x-0 border-spacing-y-1.5 text-left">
       <caption className="sr-only">Results, newest matchweek first: the model’s forecast beside what actually happened</caption>
       <colgroup>
         <col className="w-[15rem]" />
@@ -109,7 +133,7 @@ function ResultsTable({ groups }: { groups: Group[] }) {
           <th rowSpan={2} scope="col" className="type-label pb-2 pl-4 align-bottom text-[0.68rem] font-normal text-grey-400">
             Match
           </th>
-          <th colSpan={3} scope="colgroup" className="pl-cool-text relative rounded-t-xl border-x border-t border-dashed border-[rgb(150_200_255/0.3)] bg-[rgb(150_200_255/0.04)] px-4 py-2.5 font-normal after:absolute after:inset-x-[-1px] after:top-full after:h-1.5 after:border-x after:border-dashed after:border-[rgb(150_200_255/0.3)] after:bg-[rgb(150_200_255/0.04)] after:content-['']">
+          <th colSpan={3} scope="colgroup" className="text-projected relative rounded-t-xl border-x border-t border-dashed border-[rgb(150_200_255/0.3)] bg-[rgb(150_200_255/0.04)] px-4 py-2.5 font-normal after:absolute after:inset-x-[-1px] after:top-full after:h-1.5 after:border-x after:border-dashed after:border-[rgb(150_200_255/0.3)] after:bg-[rgb(150_200_255/0.04)] after:content-['']">
             <ZoneLabel zone="predicted" />
           </th>
           <th colSpan={2} scope="colgroup" className="relative rounded-t-xl border-x border-t border-hairline-strong bg-grey-800 px-4 py-2.5 font-normal after:absolute after:inset-x-[-1px] after:top-full after:h-1.5 after:border-x after:border-hairline-strong after:bg-grey-800 after:content-['']">
@@ -137,7 +161,7 @@ function ResultsTable({ groups }: { groups: Group[] }) {
           </th>
         </tr>
       </thead>
-      {groups.map((g) => (
+      {groups.map((g, gi) => (
         <tbody key={g.matchweek}>
           <tr>
             <th colSpan={7} scope="rowgroup" className="px-1 pt-7 pb-2 text-left font-normal">
@@ -145,7 +169,7 @@ function ResultsTable({ groups }: { groups: Group[] }) {
             </th>
           </tr>
           {g.rows.map((row, i) => (
-            <Rise key={row.fixture.fixture_id} as="tr" index={i}>
+            <Rise key={row.fixture.fixture_id} as="tr" index={offsets[gi] + i}>
               <TableRow row={row} />
             </Rise>
           ))}
@@ -173,7 +197,10 @@ function TableRow({ row }: { row: ResultRow }) {
         <ProbabilityBar fixture={fixture} forecast={{ shares: row.shares, percents: row.percents, pick: row.call }} />
       </td>
       <td className={`${PRED_CELL} px-3 py-3 align-middle`}>
-        <CallLabel row={row} />
+        <span className="flex flex-col items-start gap-2">
+          <CallLabel row={row} />
+          {row.backtested ? <BacktestedTag /> : null}
+        </span>
       </td>
       <td className={`${PRED_CELL} border-r px-3 py-3 align-middle text-[0.95rem] text-grey-200`}>
         <span className="sr-only">Likeliest score </span>
@@ -227,11 +254,10 @@ function ResultCard({ row }: { row: ResultRow }) {
           <time dateTime={fixture.kickoff}>{dayFormat.format(new Date(fixture.kickoff))}</time>
         </p>
       </div>
-      <div className="pl-projected flex flex-col gap-3 rounded-xl p-3.5">
-        <ZoneLabel zone="predicted" />
+      <PredictedZone aside={row.backtested ? <BacktestedTag /> : null}>
         <div className="flex items-start justify-between gap-3">
           <span className="flex items-baseline gap-2">
-            <span className="pl-cool-text font-mono text-[0.68rem] tracking-[0.12em] uppercase">Call</span>
+            <span className="text-projected font-mono text-[0.68rem] tracking-[0.12em] uppercase">Call</span>
             <CallLabel row={row} />
           </span>
           <span className="text-right text-[0.78rem] text-grey-400">
@@ -239,18 +265,17 @@ function ResultCard({ row }: { row: ResultRow }) {
           </span>
         </div>
         <ProbabilityBar fixture={fixture} forecast={{ shares: row.shares, percents: row.percents, pick: row.call }} />
-      </div>
-      <div className="pl-actual flex items-center justify-between gap-3 rounded-xl p-3.5" data-state="final">
-        <div className="flex flex-col gap-2.5">
-          <ZoneLabel zone="actual" />
+      </PredictedZone>
+      <ActualZone>
+        <div className="flex items-center justify-between gap-3">
           <Score fixture={fixture} score={row.score} />
+          <p className="text-right text-[0.95rem] font-semibold text-white">{RESULT_WORD[row.actual]}</p>
         </div>
-        <p className="text-right text-[0.95rem] font-semibold text-white">{RESULT_WORD[row.actual]}</p>
-      </div>
-      <VerdictShell tone={row.correct ? 'hit' : 'miss'}>
+      </ActualZone>
+      <VerdictZone tone={row.correct ? 'hit' : 'miss'}>
         <CorrectMark correct={row.correct} />
         <ExactScoreMark exact={row.exactScore} />
-      </VerdictShell>
+      </VerdictZone>
     </Panel>
   )
 }

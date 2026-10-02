@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { AUTHOR, REPO_URL } from '../lib/site'
+import { preloadPage } from '../pageImports'
 import { ArrowUpRightIcon } from './Icons'
 import { Wordmark } from './Wordmark'
 
@@ -10,7 +11,7 @@ const linkClass =
 function FooterLink({ to, children }: { to: string; children: ReactNode }) {
   return (
     <li>
-      <Link to={to} className={linkClass}>
+      <Link to={to} className={linkClass} onPointerEnter={() => preloadPage(to)} onFocus={() => preloadPage(to)}>
         {children}
       </Link>
     </li>

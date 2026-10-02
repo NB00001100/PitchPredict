@@ -7,7 +7,7 @@ import { useMatchweekSelection } from '../../lib/useMatchweekSelection'
  * the meter's per-matchweek strip and the carousel both read and change it
  * through `useMatchweekNav()`.
  */
-export function MatchweekNavProvider({ current, children }: { current: number; children: ReactNode }) {
-  const nav = useMatchweekSelection(current)
+export function MatchweekNavProvider({ current, seasonOver = false, children }: { current: number; seasonOver?: boolean; children: ReactNode }) {
+  const nav = useMatchweekSelection(current, seasonOver)
   return <MatchweekNavContext value={nav}>{children}</MatchweekNavContext>
 }

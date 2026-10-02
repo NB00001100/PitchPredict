@@ -2,7 +2,8 @@ import type { ReactNode } from 'react'
 import { Panel } from '../Panel'
 import { PointerLight } from '../PointerLight'
 import { Reveal, RevealItem } from '../Reveal'
-import { ActualZone, PredictedActual, PredictedZone } from '../PredictedActual'
+import { CheckIcon } from '../Icons'
+import { ActualZone, PredictedActual, PredictedZone, VerdictZone } from '../PredictedActual'
 
 interface Step {
   title: string
@@ -68,16 +69,28 @@ function ScorelineArt() {
   )
 }
 
-/** An illustrative graded pick (not real data): forecast and result kept apart. */
+/** An illustrative graded pick (not real data): forecast, result and verdict kept apart, as on the forecast pages. */
 function GradeArt() {
   return (
-    <PredictedActual>
-      <PredictedZone when={false}>
-        Home win <span className="font-mono text-grey-400">54%</span>
+    <PredictedActual className="grid-cols-2!">
+      <PredictedZone className="gap-1.5 p-2.5">
+        <span className="text-[0.8rem] text-white">
+          Home win <span className="font-mono text-grey-200">54%</span>
+        </span>
       </PredictedZone>
-      <ActualZone when={false} verdict="hit">
-        Home win <span className="font-mono text-grey-400">2–1</span>
+      <ActualZone className="gap-1.5 p-2.5">
+        <span className="text-[0.8rem] text-white">
+          Home win <span className="font-mono text-grey-200">2–1</span>
+        </span>
       </ActualZone>
+      <VerdictZone tone="hit" className="col-span-2 px-2.5! py-2!">
+        <span className="inline-flex items-center gap-2 font-wide text-[0.66rem] font-bold tracking-[0.16em] text-pitch uppercase">
+          <span className="inline-flex size-5 items-center justify-center rounded-full bg-pitch text-black">
+            <CheckIcon className="size-3" strokeWidth={2.4} />
+          </span>
+          Hit
+        </span>
+      </VerdictZone>
     </PredictedActual>
   )
 }

@@ -28,7 +28,7 @@ export function LeanDrawTag({ pDraw }: { pDraw: number }) {
   return (
     <span
       title={`Draw was close: ${formatPct(pDraw * 100)}`}
-      className="pl-cool-text inline-flex h-5 items-center rounded-full border border-dashed border-[rgb(150_200_255/0.5)] px-2 font-mono text-[0.6rem] leading-none tracking-[0.08em] whitespace-nowrap uppercase"
+      className="text-projected inline-flex h-5 items-center rounded-full border border-dashed border-[rgb(150_200_255/0.5)] px-2 font-mono text-[0.6rem] leading-none tracking-[0.08em] whitespace-nowrap uppercase"
     >
       Lean draw
       <span className="sr-only">: the draw was close to the top probability, or above 30%</span>

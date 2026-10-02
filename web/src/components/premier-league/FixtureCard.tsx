@@ -6,13 +6,13 @@ import type { Fixture } from '../../lib/types'
 import { actualOutcome } from '../../lib/weekBreakdown'
 import { CheckIcon, CrossIcon } from '../Icons'
 import { Panel } from '../Panel'
+import { ActualZone, PredictedZone, VerdictZone, type VerdictTone } from '../PredictedActual'
 import { PointerLight } from '../PointerLight'
 import { Tag } from '../Tag'
 import { TeamMonogram } from '../TeamMonogram'
 import { BacktestedTag } from './Backtested'
 import { ClockIcon } from './icons'
 import { ProbabilityBar } from './ProbabilityBar'
-import { ZoneLabel } from './ZoneLabel'
 
 /**
  * One fixture, in four parts that keep the same order in every state so the
@@ -68,13 +68,9 @@ function TeamRow({ tla, name, side }: { tla: string; name: string; side: string 
 function Predicted({ view, delay }: { view: FixtureView; delay: number }) {
   const { forecast } = view
   return (
-    <div className="pl-projected flex flex-col gap-3 rounded-xl p-3.5">
-      <div className="flex min-h-6 items-center justify-between gap-2">
-        <ZoneLabel zone="predicted" />
-        {forecast?.backtested ? <BacktestedTag /> : null}
-      </div>
+    <PredictedZone aside={forecast?.backtested ? <BacktestedTag /> : null}>
       {forecast ? <Forecast view={view} forecast={forecast} delay={delay} /> : <NoForecast finished={view.phase === 'finished'} />}
-    </div>
+    </PredictedZone>
   )
 }
 
@@ -82,7 +78,7 @@ function Forecast({ view, forecast, delay }: { view: FixtureView; forecast: Fore
   return (
     <>
       <p className="flex flex-wrap items-baseline gap-x-2 leading-snug">
-        <span className="pl-cool-text font-mono text-[0.68rem] tracking-[0.12em] uppercase">Pick</span>
+        <span className="text-projected font-mono text-[0.68rem] tracking-[0.12em] uppercase">Pick</span>
         <span className="text-[0.98rem] font-semibold text-white">{forecast.pickLabel}</span>
       </p>
       <ProbabilityBar fixture={view.fixture} forecast={forecast} delay={delay} />
@@ -120,18 +116,14 @@ function Actual({ view }: { view: FixtureView }) {
   const { fixture, phase, score } = view
   const pending = phase !== 'finished'
   return (
-    <div className="pl-actual flex flex-col gap-2.5 rounded-xl p-3.5" data-state={pending ? 'pending' : 'final'}>
-      <div className="flex min-h-6 items-center justify-between gap-2">
-        <ZoneLabel zone="actual" />
-        <ActualStatus view={view} />
-      </div>
+    <ActualZone pending={pending} aside={<ActualStatus view={view} />}>
       {score ? (
         <Score fixture={fixture} score={score} dim={phase !== 'finished'} />
       ) : phase === 'scheduled' ? (
         <p className="flex flex-col gap-1">
           <span className="flex items-center gap-1.5 text-[0.8rem] text-grey-200">
             <ClockIcon className="size-3.5" />
-            Awaiting kickoff
+            Awaiting kick-off
           </span>
           <time dateTime={fixture.kickoff} className="font-mono text-[1.6rem] leading-none font-medium text-grey-200 tabular-nums">
             {formatKickoffTime(fixture.kickoff)}
@@ -141,7 +133,7 @@ function Actual({ view }: { view: FixtureView }) {
         <p className="text-[0.95rem] font-medium text-grey-200">{NO_SCORE_TEXT[phase] ?? 'No score yet'}</p>
       )}
       <ResultLine view={view} />
-    </div>
+    </ActualZone>
   )
 }
 
@@ -237,9 +229,11 @@ function Verdict({ view }: { view: FixtureView }) {
     ? phase === 'finished'
       ? 'Not graded'
       : 'Graded at full time'
-    : phase === 'postponed' || phase === 'cancelled'
+    : phase === 'cancelled'
       ? 'Not graded'
-      : 'Graded at full time'
+      : phase === 'postponed'
+        ? 'Graded once played'
+        : 'Graded at full time'
   return (
     <VerdictShell tone="pending">
       <span className="inline-flex items-center gap-2 text-[0.82rem] text-grey-400">
@@ -253,18 +247,11 @@ function Verdict({ view }: { view: FixtureView }) {
   )
 }
 
-const VERDICT_TONE = {
-  hit: 'border-pitch/45 bg-pitch-dim/80 shadow-[inset_0_1px_0_0_rgb(60_240_140/0.25)]',
-  miss: 'border-miss/45 bg-miss-dim/80 shadow-[inset_0_1px_0_0_rgb(255_107_112/0.22)]',
-  pending: 'border-hairline bg-black/20',
-} as const
-
-export function VerdictShell({ tone, children }: { tone: keyof typeof VERDICT_TONE; children: ReactNode }) {
+/** The verdict zone as a card column: a strip on phones, a stacked cell in the wide ledger row. */
+export function VerdictShell({ tone, children }: { tone: VerdictTone; children: ReactNode }) {
   return (
-    <p
-      className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border px-3.5 py-3 lg:flex-col lg:flex-nowrap lg:items-start lg:justify-center ${VERDICT_TONE[tone]}`}
-    >
+    <VerdictZone tone={tone} className="lg:flex-col lg:flex-nowrap lg:items-start lg:justify-center">
       {children}
-    </p>
+    </VerdictZone>
   )
 }

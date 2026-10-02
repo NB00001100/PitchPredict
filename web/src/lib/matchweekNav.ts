@@ -3,8 +3,10 @@ import { createContext, use } from 'react'
 export interface MatchweekNav {
   /** The matchweek on screen. */
   selected: number
-  /** The matchweek being played or coming up next. */
+  /** The matchweek being played or coming up next (the last one once the season is over). */
   current: number
+  /** True once every matchweek has been played: `current` is then the final matchweek, not "this week". */
+  seasonOver: boolean
   /** Shows matchweek `n` (clamped to the season) and records it in the URL. */
   go: (n: number) => void
   /**

@@ -1,15 +1,39 @@
 <!doctype html>
-<html lang="en" style="background-color: #000; color-scheme: dark">
+<html lang="en-GB" style="background-color: #04090a; color-scheme: dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/src/assets/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#000000" />
+    <title>PitchPredict · Premier League forecasts, graded in public</title>
     <meta
       name="description"
-      content="Premier League match predictions from a Dixon-Coles statistical model, scored openly against real results."
+      content="Home, draw and away chances for every Premier League match from a from-scratch Dixon–Coles model, graded in public after full time. It doesn't beat the bookmakers, and it says so."
     />
-    <title>PitchPredict</title>
+    <meta name="theme-color" content="#04090a" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Link previews. __SITE_URL__ is the deployed origin (VITE_SITE_URL), filled in at build time. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="PitchPredict" />
+    <meta property="og:title" content="PitchPredict · Premier League forecasts, graded in public" />
+    <meta
+      property="og:description"
+      content="Every Premier League match gets a home, draw and away chance before kick-off, and every pick is graded after full time."
+    />
+    <meta property="og:url" content="__SITE_URL__/" />
+    <meta property="og:image" content="__SITE_URL__/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="PitchPredict: Called before kick-off. Graded after full time." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PitchPredict · Premier League forecasts, graded in public" />
+    <meta
+      name="twitter:description"
+      content="Every Premier League match gets a home, draw and away chance before kick-off, and every pick is graded after full time."
+    />
+    <meta name="twitter:image" content="__SITE_URL__/og-image.jpg" />
   </head>
   <body>
     <div id="root"></div>

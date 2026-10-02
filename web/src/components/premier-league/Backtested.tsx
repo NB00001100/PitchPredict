@@ -16,7 +16,7 @@ export function BacktestedTag() {
     <button
       type="button"
       popoverTarget={POPOVER_ID}
-      className="pl-cool-text relative inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-[rgb(150_200_255/0.35)] bg-black/50 px-2.5 font-wide text-[0.6rem] leading-none font-semibold tracking-[0.16em] uppercase transition-colors duration-200 before:absolute before:-inset-2 before:content-[''] hover:border-[rgb(150_200_255/0.7)] hover:bg-[rgb(150_200_255/0.12)]"
+      className="text-projected relative inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-[rgb(150_200_255/0.35)] bg-black/50 px-2.5 font-wide text-[0.6rem] leading-none font-semibold tracking-[0.16em] uppercase transition-colors duration-200 before:absolute before:-inset-2 before:content-[''] hover:border-[rgb(150_200_255/0.7)] hover:bg-[rgb(150_200_255/0.12)]"
     >
       Backtested
       <InfoIcon className="size-3" strokeWidth={1.8} />
@@ -34,13 +34,13 @@ export function BacktestedExplainer() {
       aria-labelledby={`${POPOVER_ID}-title`}
       className="glass m-auto max-w-[min(24rem,calc(100vw-2rem))] rounded-2xl bg-black/85! p-6 text-left text-white shadow-lift backdrop:bg-black/70 backdrop:backdrop-blur-sm"
     >
-      <p className="pl-cool-text type-label">Predicted · backtested</p>
+      <p className="text-projected type-label">Predicted · backtested</p>
       <p id={`${POPOVER_ID}-title`} className="type-title mt-3 uppercase">
         Backtested forecast
       </p>
       <p className="mt-3 text-sm leading-relaxed text-grey-200">
         This forecast was generated after the match was played, using only data from before its matchweek, so the
-        model could not see the result. Forecasts from now on are published before kickoff.
+        model could not see the result. Forecasts from now on are published before kick-off.
       </p>
       <div className="mt-5 flex items-center justify-between gap-4 text-sm">
         <TextLink to="/about">How it works</TextLink>

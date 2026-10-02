@@ -5,7 +5,7 @@ import type { Outcome } from '../../lib/types'
 import { describeCounts, weekBreakdown, type OutcomeCounts, type WeekBreakdownRow } from '../../lib/weekBreakdown'
 import { CheckIcon, CrossIcon } from '../Icons'
 import { Panel } from '../Panel'
-import { ZoneLabel } from './ZoneLabel'
+import { ZoneLabel } from '../PredictedActual'
 
 const STATUS: Record<WeekSummary['status'], string> = {
   played: 'Played',
@@ -14,14 +14,14 @@ const STATUS: Record<WeekSummary['status'], string> = {
 }
 
 /** "Matchweek 6", its status and date range. */
-export function MatchweekTitle({ week, isCurrent }: { week: WeekSummary; isCurrent: boolean }) {
+export function MatchweekTitle({ week, current }: { week: WeekSummary; current: string | null }) {
   const range = formatDateRange(week.fixtures)
   const count = week.fixtures.length
   return (
     <div className="flex flex-col gap-3">
       <p className="type-eyebrow flex items-center gap-3 text-pitch">
         <span aria-hidden="true" className="h-px w-8 bg-pitch/70" />
-        {isCurrent ? `This week · ${STATUS[week.status]}` : STATUS[week.status]}
+        {current ? `${current} · ${STATUS[week.status]}` : STATUS[week.status]}
       </p>
       <h2 id="matchweek-heading" className="type-headline whitespace-nowrap">
         Matchweek <span className="text-glow">{week.matchweek}</span>
@@ -70,7 +70,7 @@ export function WeekBreakdownPanel({ week }: { week: WeekSummary }) {
       <p className="sr-only">{summary}</p>
       <div aria-hidden="true" className="flex flex-col gap-2">
         <Row
-          frame="pl-projected"
+          frame="zone-predicted"
           label={<ZoneLabel zone="predicted">What we predicted</ZoneLabel>}
           note={predictedNote}
           cells={b.rows.map((r) => (
@@ -80,7 +80,7 @@ export function WeekBreakdownPanel({ week }: { week: WeekSummary }) {
           aside={<Counts counts={b.picks} empty={b.forecasts === 0} />}
         />
         <Row
-          frame="pl-actual"
+          frame="zone-actual"
           label={<ZoneLabel zone="actual">What happened</ZoneLabel>}
           note={actualNote}
           cells={b.rows.map((r) => (
@@ -110,7 +110,7 @@ export function WeekBreakdownPanel({ week }: { week: WeekSummary }) {
         <span>
           <b className="font-semibold text-grey-200">A</b> away win
         </span>
-        <span className="text-grey-500">Columns: each match, in kickoff order</span>
+        <span className="text-grey-500">Columns: each match, in kick-off order</span>
       </p>
     </Panel>
   )
@@ -192,7 +192,7 @@ function Counts({ counts, empty, bright = false }: { counts: OutcomeCounts; empt
       {(['H', 'D', 'A'] as const).map((o) => (
         <span key={o} className="text-right">
           <span className="text-grey-500">{o} </span>
-          <span className={empty ? 'text-grey-500' : bright ? 'font-semibold text-white' : 'pl-cool-text font-medium'}>
+          <span className={empty ? 'text-grey-500' : bright ? 'font-semibold text-white' : 'text-projected font-medium'}>
             {empty ? '–' : counts[o]}
           </span>
         </span>

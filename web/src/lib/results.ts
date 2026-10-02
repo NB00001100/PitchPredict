@@ -76,6 +76,8 @@ export interface ResultRow {
   score: [number, number]
   exactScore: boolean
   rps: number
+  /** The forecast was generated after the match, from data before its matchweek. */
+  backtested: boolean
 }
 
 /**
@@ -105,6 +107,7 @@ export function resultRows(fixtures: readonly Fixture[]): ResultRow[] {
       score,
       exactScore: modalScore !== null && modalScore[0] === score[0] && modalScore[1] === score[1],
       rps: rps(shares, actual),
+      backtested: fixture.is_backfill === true,
     })
   }
   return rows.sort(
@@ -149,6 +152,8 @@ export interface ResultsSummary extends Tally {
   /** Mean RPS over the rows, or null with none. */
   meanRps: number | null
   exactScores: number
+  /** Rows whose forecast is backtested rather than published before kick-off. */
+  backtested: number
 }
 
 const tally = (hits: number, n: number): Tally => ({ hits, n, pct: n ? (hits / n) * 100 : null })
@@ -158,7 +163,9 @@ export function summariseResults(rows: readonly ResultRow[]): ResultsSummary {
   let hits = 0
   let rpsSum = 0
   let exactScores = 0
+  let backtested = 0
   for (const r of rows) {
+    if (r.backtested) backtested += 1
     counts[r.actual][1] += 1
     if (r.correct) {
       hits += 1
@@ -172,6 +179,7 @@ export function summariseResults(rows: readonly ResultRow[]): ResultsSummary {
     byActual: { H: tally(...counts.H), D: tally(...counts.D), A: tally(...counts.A) },
     meanRps: rows.length ? rpsSum / rows.length : null,
     exactScores,
+    backtested,
   }
 }
 

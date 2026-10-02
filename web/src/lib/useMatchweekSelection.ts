@@ -16,7 +16,7 @@ export const MW_PARAM = 'mw'
  * (where the browser supports it). A missing or invalid `?mw` shows
  * `current`; an invalid one is also removed from the URL.
  */
-export function useMatchweekSelection(current: number): MatchweekNav {
+export function useMatchweekSelection(current: number, seasonOver = false): MatchweekNav {
   const [params, setParams] = useSearchParams()
   const raw = params.get(MW_PARAM)
   const fromUrl = parseMatchweekParam(raw, current)
@@ -77,5 +77,5 @@ export function useMatchweekSelection(current: number): MatchweekNav {
   const go = useCallback((n: number) => navigate(() => n), [navigate])
   const step = useCallback((delta: number) => navigate((latest) => latest + delta), [navigate])
 
-  return { selected, current, go, step }
+  return { selected, current, seasonOver, go, step }
 }

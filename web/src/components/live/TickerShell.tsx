@@ -27,7 +27,7 @@ export function TickerSkeleton() {
 /** Placeholder for the hero's featured forecast card. */
 export function FeaturedSkeleton() {
   return (
-    <div className="glass flex h-[30rem] flex-col gap-6 rounded-2xl p-6">
+    <div className="glass flex h-[31rem] flex-col gap-6 rounded-2xl p-6">
       <output className="sr-only">Loading the featured forecast…</output>
       <span className="skeleton block h-5 w-44 rounded-full" />
       <span className="flex flex-col gap-3">

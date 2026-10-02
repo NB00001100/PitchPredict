@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router'
 import { DURATION, EASE_OUT_EXPO } from '../lib/motion'
 import { REPO_URL } from '../lib/site'
+import { preloadPage } from '../pageImports'
 import { ArrowUpRightIcon, CrossIcon, MenuIcon } from './Icons'
 import { Wordmark } from './Wordmark'
 
@@ -58,6 +59,8 @@ function DesktopNav() {
           <li key={item.to}>
             <NavLink
               to={item.to}
+              onPointerEnter={() => preloadPage(item.to)}
+              onFocus={() => preloadPage(item.to)}
               className={({ isActive }) => `${linkBase} ${isActive ? 'text-white' : 'text-grey-400 hover:text-white'}`}
             >
               {({ isActive }) => (
@@ -115,7 +118,10 @@ function MobileNav() {
         type="button"
         aria-expanded={open}
         aria-controls={menuId}
-        onClick={() => setOpenOn(open ? null : pathname)}
+        onClick={() => {
+          if (!open) for (const item of NAV) preloadPage(item.to)
+          setOpenOn(open ? null : pathname)
+        }}
         className="glass inline-flex h-10 items-center gap-2 rounded-full px-4 font-wide text-[0.66rem] font-semibold tracking-[0.14em] uppercase"
       >
         {open ? <CrossIcon className="size-3.5" /> : <MenuIcon className="size-3.5" />}
@@ -137,6 +143,7 @@ function MobileNav() {
                 <li key={item.to}>
                   <NavLink
                     to={item.to}
+                    onFocus={() => preloadPage(item.to)}
                     className={({ isActive }) =>
                       `flex h-12 items-center justify-between rounded-xl px-4 font-wide text-xs font-semibold tracking-[0.14em] uppercase ${isActive ? 'bg-glass-strong text-pitch' : 'text-white'}`
                     }

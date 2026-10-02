@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright smoke test output
+e2e/.dist
+playwright-report
+test-results

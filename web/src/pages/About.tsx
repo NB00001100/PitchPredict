@@ -10,32 +10,46 @@ import { PointerLight } from '../components/PointerLight'
 import { ProbabilityBar } from '../components/ProbabilityBar'
 import { Reveal, RevealItem } from '../components/Reveal'
 import { Tag } from '../components/Tag'
+import {
+  BACKTEST_MATCHES,
+  BASE_RATES_PCT,
+  BASE_RATES_RPS,
+  BOOKMAKERS_PCT,
+  BOOKMAKERS_RPS,
+  MODEL_BACKTEST_PCT,
+  MODEL_BACKTEST_RPS,
+} from '../lib/benchmarks'
 import { EASE_OUT_EXPO } from '../lib/motion'
+import { useLocation } from 'react-router'
 import { AUTHOR, REPO_URL } from '../lib/site'
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion'
 
-/* Out-of-sample results on 1,190 matches. Ordered best to worst. */
+/* Out-of-sample results on BACKTEST_MATCHES matches (lib/benchmarks.ts). Ordered best to worst. */
 const ACCURACY: BarRow[] = [
-  { name: 'Bookmakers', detail: 'closing odds', value: 54.6 },
-  { name: 'PitchPredict', detail: 'this model', value: 51.7, emphasis: true },
-  { name: 'Base rates', detail: 'historical average', value: 42.9 },
+  { name: 'Bookmakers', detail: 'closing odds', value: BOOKMAKERS_PCT },
+  { name: 'PitchPredict', detail: 'this model', value: MODEL_BACKTEST_PCT, emphasis: true },
+  { name: 'Base rates', detail: 'historical average', value: BASE_RATES_PCT },
 ]
 
 const RPS: BarRow[] = [
-  { name: 'Bookmakers', detail: 'closing odds', value: 0.1943 },
-  { name: 'PitchPredict', detail: 'this model', value: 0.2003, emphasis: true },
-  { name: 'Base rates', detail: 'historical average', value: 0.2322 },
+  { name: 'Bookmakers', detail: 'closing odds', value: BOOKMAKERS_RPS },
+  { name: 'PitchPredict', detail: 'this model', value: MODEL_BACKTEST_RPS, emphasis: true },
+  { name: 'Base rates', detail: 'historical average', value: BASE_RATES_RPS },
 ]
+
+const MATCHES = BACKTEST_MATCHES.toLocaleString('en-GB')
+const rps4 = (n: number) => n.toFixed(4)
 
 const CHAPTERS = [
   { id: 'model', title: 'The model' },
   { id: 'how-good', title: 'How good is it?' },
-  { id: 'draws', title: 'Why it never picks a draw' },
+  { id: 'draws', title: 'Why it almost never picks a draw' },
   { id: 'backtested', title: 'What “backtested” means' },
   { id: 'who', title: 'Who built it' },
 ] as const
 
 export default function About() {
+  useScrollToHash()
   return (
     <>
       <title>How it works · PitchPredict</title>
@@ -56,6 +70,20 @@ export default function About() {
 }
 
 /* ---------- Chrome ---------- */
+
+/**
+ * Deep links such as /about#backtested: the page is lazy-loaded, so the
+ * chapter didn't exist when the router tried to scroll to it. Scroll once it
+ * has rendered.
+ */
+function useScrollToHash() {
+  const { hash } = useLocation()
+  useEffect(() => {
+    if (!hash) return
+    const target = document.getElementById(decodeURIComponent(hash.slice(1)))
+    target?.scrollIntoView({ block: 'start' })
+  }, [hash])
+}
 
 /** A pitch-green hairline under the header that fills as you read. */
 function ReadingProgress() {
@@ -243,7 +271,7 @@ function HowGoodChapter() {
     <Chapter id="how-good" n={2} title="How good is it?">
       <Prose>
         <p>
-          It was tested on <Num>1,190</Num> matches it had not seen, and compared with two yardsticks: the bookmakers’
+          It was tested on <Num>{MATCHES}</Num> past matches it had not seen, and compared with two yardsticks: the bookmakers’
           closing odds, and simply guessing from historical base rates.
         </p>
       </Prose>
@@ -259,7 +287,7 @@ function HowGoodChapter() {
               format={(n) => `${n.toFixed(1)}%`}
               tickFormat={(n) => `${n}%`}
               valueLabel="Top pick right"
-              note="Share of the 1,190 unseen matches where the forecaster’s most likely outcome was what happened."
+              note={`Share of the ${MATCHES} unseen matches where the forecaster’s most likely outcome was what happened.`}
             />
           </Panel>
         </Reveal>
@@ -274,7 +302,7 @@ function HowGoodChapter() {
               format={(n) => n.toFixed(4)}
               tickFormat={(n) => (n === 0 ? '0' : n.toFixed(2))}
               valueLabel="RPS (lower is better)"
-              note="Shorter bar, better forecast. Same 1,190 matches."
+              note={`Shorter bar, better forecast. Same ${MATCHES} matches.`}
             />
           </Panel>
         </Reveal>
@@ -284,8 +312,8 @@ function HowGoodChapter() {
           <p>
             The main score is the RPS (ranked probability score), where <strong>lower is better</strong>. It judges the
             whole forecast, not only the top pick: a confident forecast that turns out wrong costs more than a cautious
-            one. The model’s <Num>0.2003</Num> sits between the base rates (<Num>0.2322</Num>) and the market (
-            <Num>0.1943</Num>).
+            one. The model’s <Num>{rps4(MODEL_BACKTEST_RPS)}</Num> sits between the base rates (
+            <Num>{rps4(BASE_RATES_RPS)}</Num>) and the bookmakers (<Num>{rps4(BOOKMAKERS_RPS)}</Num>).
           </p>
         </Prose>
       </div>
@@ -303,7 +331,7 @@ function HowGoodChapter() {
 
 function DrawsChapter() {
   return (
-    <Chapter id="draws" n={3} title="Why it never picks a draw">
+    <Chapter id="draws" n={3} title="Why it almost never picks a draw">
       <Reveal>
         <Panel tone="accent" className="grid gap-8 p-6 sm:p-8 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)] md:items-center">
           <PointerLight />
@@ -313,8 +341,9 @@ function DrawsChapter() {
               one match.
             </p>
             <p>
-              So the model’s pick, its most likely outcome, is always a home or an away win. The chance of a draw is
-              still in every forecast; it just rarely comes out on top.
+              So the model’s pick, its most likely outcome, is almost always a home or an away win: across the{' '}
+              {MATCHES} backtest matches it never picked a draw. The chance of a draw is still in every forecast; it
+              just rarely comes out on top.
             </p>
           </div>
           <figure className="flex flex-col gap-4 rounded-xl border border-hairline bg-black/40 p-5">

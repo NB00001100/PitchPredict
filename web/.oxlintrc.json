@@ -6,5 +6,5 @@
     "react/exhaustive-deps": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }]
   },
-  "ignorePatterns": ["dist"]
+  "ignorePatterns": ["dist", "e2e/.dist", "playwright-report", "test-results"]
 }

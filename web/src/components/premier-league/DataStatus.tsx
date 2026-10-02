@@ -22,7 +22,7 @@ export function DataStatus({ fixtures, updatedAt }: { fixtures: readonly Fixture
   return (
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <span aria-hidden="true" className="size-1.5 rounded-full bg-pitch shadow-[0_0_8px_var(--color-pitch)]" />
-      <span>{through === null ? 'No results yet' : `Results through matchweek ${through}`}</span>
+      <span>{through === null ? 'No results yet' : `Latest results: matchweek ${through}`}</span>
       {updatedAt !== null ? (
         <>
           <span aria-hidden="true" className="text-grey-500">

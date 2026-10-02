@@ -6,9 +6,11 @@ import type { WeekSummary } from '../../lib/season'
  * Scrollable strip of matchweeks 1–38. Played weeks show their score, the
  * current week says "Now", future weeks sit back; the selected one is lit in
  * pitch green and kept centred (scrolling the strip only, never the page).
+ * The strip is one tab stop (the selected week); Left and Right arrows, handled
+ * by the carousel, move the selection and focus follows it.
  */
 export function MatchweekPicker({ weeks }: { weeks: readonly WeekSummary[] }) {
-  const { selected, current, go } = useMatchweekNav()
+  const { selected, current, seasonOver, go } = useMatchweekNav()
   const strip = useRef<HTMLOListElement>(null)
   const first = useRef(true)
 
@@ -19,9 +21,12 @@ export function MatchweekPicker({ weeks }: { weeks: readonly WeekSummary[] }) {
     const smooth = !first.current && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
     first.current = false
     list.scrollTo({ left: item.offsetLeft - (list.clientWidth - item.offsetWidth) / 2, behavior: smooth ? 'smooth' : 'auto' })
+    // Roving focus: if the keyboard is in the strip, follow the selection.
+    if (list.contains(document.activeElement)) item.querySelector('button')?.focus({ preventScroll: true })
   }, [selected])
 
   return (
+    <>
     <ol
       ref={strip}
       className="pl-strip-mask relative flex min-w-0 flex-1 gap-1 overflow-x-auto overscroll-x-contain scroll-px-6 px-5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -30,15 +35,18 @@ export function MatchweekPicker({ weeks }: { weeks: readonly WeekSummary[] }) {
         const isSelected = week.matchweek === selected
         const isCurrent = week.matchweek === current
         const graded = week.rate.total > 0
-        const caption = isCurrent ? 'Now' : graded ? `${week.rate.hits}/${week.rate.total}` : ''
+        const caption = isCurrent && !seasonOver ? 'Now' : graded ? `${week.rate.hits}/${week.rate.total}` : ''
         const future = week.matchweek > current
         return (
           <li key={week.matchweek} data-mw={week.matchweek} className="shrink-0">
             <button
               type="button"
               onClick={() => go(week.matchweek)}
+              // One tab stop for the whole strip (the selected week); arrow keys move along it.
+              tabIndex={isSelected ? 0 : -1}
+              aria-describedby="mw-keys"
               aria-current={isSelected ? 'true' : undefined}
-              aria-label={`Matchweek ${week.matchweek}${isCurrent ? ', this week' : ''}${graded ? `, ${week.rate.hits} of ${week.rate.total} correct` : ''}`}
+              aria-label={`Matchweek ${week.matchweek}${isCurrent && !seasonOver ? ', this week' : ''}${graded ? `, ${week.rate.hits} of ${week.rate.total} correct` : ''}`}
               className={`relative flex h-12 w-12 flex-col items-center justify-center gap-1 rounded-xl transition-[background-color,color,box-shadow,scale] duration-200 focus-visible:outline-offset-1 active:scale-95 ${
                 isSelected
                   ? 'bg-pitch text-black shadow-[0_0_0_1px_rgb(155_255_200/0.7),0_6px_24px_-6px_rgb(60_240_140/0.75)]'
@@ -60,5 +68,9 @@ export function MatchweekPicker({ weeks }: { weeks: readonly WeekSummary[] }) {
         )
       })}
     </ol>
+    <p className="sr-only" id="mw-keys">
+      Left and right arrow keys change the matchweek.
+    </p>
+    </>
   )
 }

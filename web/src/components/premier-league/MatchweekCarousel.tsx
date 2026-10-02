@@ -18,7 +18,7 @@ import './premierLeague.css'
  * over the fixtures.
  */
 export function MatchweekCarousel({ weeks }: { weeks: readonly WeekSummary[] }) {
-  const { selected, current, step } = useMatchweekNav()
+  const { selected, current, seasonOver, step } = useMatchweekNav()
   const week = weeks[selected - FIRST_MATCHWEEK]
   const swipe = useSwipe((direction) => step(direction === 'left' ? 1 : -1))
 
@@ -52,7 +52,7 @@ export function MatchweekCarousel({ weeks }: { weeks: readonly WeekSummary[] }) 
         <div className="relative min-w-0">
           <Slide matchweek={selected}>
             <div className="min-w-0">
-              <MatchweekTitle week={week} isCurrent={selected === current} />
+              <MatchweekTitle week={week} current={selected === current ? (seasonOver ? 'Final matchweek' : 'This week') : null} />
             </div>
           </Slide>
           {/* Floats at the end of the eyebrow row (which is short whenever this shows), so it never moves the layout. */}
@@ -75,7 +75,7 @@ export function MatchweekCarousel({ weeks }: { weeks: readonly WeekSummary[] }) 
         </Slide>
       </div>
       <p className="sr-only" aria-live="polite">
-        {`Showing matchweek ${selected}${selected === current ? ', this week' : ''}`}
+        {`Showing matchweek ${selected}${selected === current ? (seasonOver ? ', the final matchweek' : ', this week') : ''}`}
       </p>
     </section>
   )
@@ -117,7 +117,7 @@ function ControlBar({ weeks }: { weeks: readonly WeekSummary[] }) {
 }
 
 function BackToThisWeek() {
-  const { selected, current, go } = useMatchweekNav()
+  const { selected, current, seasonOver, go } = useMatchweekNav()
   const away = selected !== current
   return (
     <button
@@ -129,7 +129,7 @@ function BackToThisWeek() {
       className={`glass inline-flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 font-wide text-[0.62rem] font-semibold tracking-[0.14em] whitespace-nowrap uppercase transition-[opacity,scale,border-color,color] duration-300 ease-out-expo hover:border-pitch/50 hover:text-pitch active:scale-95 ${away ? 'opacity-100' : 'pointer-events-none scale-95 opacity-0'}`}
     >
       <ReturnIcon className="size-3.5" />
-      Back to this week
+      {seasonOver ? `Back to matchweek ${current}` : 'Back to this week'}
     </button>
   )
 }

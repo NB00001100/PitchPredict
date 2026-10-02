@@ -9,7 +9,7 @@ import { LoadError } from '../components/premier-league/LoadError'
 import { SeasonPanel } from '../components/premier-league/SeasonPanel'
 import '../components/premier-league/premierLeague.css'
 import { useMatchweekNav } from '../lib/matchweekNav'
-import { summariseSeason } from '../lib/season'
+import { summariseSeason, withSeason } from '../lib/season'
 import type { Fixture } from '../lib/types'
 import { useFixtures } from '../lib/useFixtures'
 
@@ -21,6 +21,7 @@ export default function PremierLeague() {
   return (
     <>
       <PageHero
+        eyebrow={withSeason('Forecasts', fixtures)}
         status={
           status === 'ready' ? <DataStatus fixtures={fixtures} updatedAt={updatedAt} /> : <p>{status === 'loading' ? 'Loading…' : 'Data unavailable'}</p>
         }
@@ -45,7 +46,7 @@ export default function PremierLeague() {
 function Season({ fixtures }: { fixtures: readonly Fixture[] }) {
   const season = useMemo(() => summariseSeason(fixtures), [fixtures])
   return (
-    <MatchweekNavProvider current={season.current}>
+    <MatchweekNavProvider current={season.current} seasonOver={season.complete}>
       <SelectedTitle />
       <SeasonPanel season={season} />
       <MatchweekCarousel weeks={season.weeks} />

@@ -28,10 +28,10 @@ export function PageSkeleton() {
             </div>
             <div className="my-9 h-px bg-hairline" />
             <span className="skeleton block h-3 w-52 rounded" />
-            <div className="mt-5 grid grid-cols-19 items-end gap-x-1 gap-y-5 sm:grid-cols-38">
+            <div className="mt-5 grid grid-cols-10 items-end gap-y-5 sm:grid-cols-19 lg:grid-cols-38">
               {Array.from({ length: 38 }, (_, i) => (
                 <span key={i} className="flex flex-col items-center gap-1.5">
-                  <span className="block h-16 w-full border-b border-grey-700 sm:h-20" />
+                  <span className="block h-14 w-full border-b border-grey-700 sm:h-16 lg:h-20" />
                   <span className="block h-2.5 w-3 rounded-sm bg-grey-800" />
                 </span>
               ))}
@@ -68,8 +68,8 @@ export function PageSkeleton() {
                     <span className="skeleton block h-8 w-40 rounded-full" />
                     <span className="skeleton block h-8 w-36 rounded-full" />
                   </span>
-                  <span className="pl-projected block h-[9.5rem] rounded-xl" />
-                  <span className="pl-actual block h-[7.5rem] rounded-xl lg:h-auto" data-state="pending" />
+                  <span className="zone-predicted block h-[9.5rem] rounded-xl" />
+                  <span className="zone-actual block h-[7.5rem] rounded-xl lg:h-auto" data-state="pending" />
                   <span className="block h-12 rounded-xl border border-hairline lg:h-auto" />
                 </Panel>
               ))}

@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router'
 import { Panel } from '../components/Panel'
+import { BacktestedExplainer } from '../components/premier-league/Backtested'
 import { DataStatus } from '../components/premier-league/DataStatus'
 import { LoadError } from '../components/premier-league/LoadError'
 import { PageHero } from '../components/premier-league/PageHero'
@@ -11,6 +12,7 @@ import '../components/premier-league/premierLeague.css'
 import { filterRows, parseOutcomeFilter, resultMatchweeks, resultRows, summariseResults, type OutcomeFilter } from '../lib/results'
 import type { Fixture } from '../lib/types'
 import { useFixtures } from '../lib/useFixtures'
+import { withSeason } from '../lib/season'
 
 const TITLE = 'Results · Premier League · PitchPredict'
 
@@ -20,7 +22,7 @@ export default function PremierLeagueResults() {
     <>
       <title>{TITLE}</title>
       <PageHero
-        eyebrow="Results · 2026/27 season"
+        eyebrow={withSeason('Results', fixtures)}
         lede="Every finished match the model forecast, newest first: what it predicted beside what actually happened, and how both the calls and the probabilities scored."
         status={status === 'ready' ? <DataStatus fixtures={fixtures} updatedAt={updatedAt} /> : <p>{status === 'loading' ? 'Loading…' : 'Data unavailable'}</p>}
       />
@@ -31,6 +33,7 @@ export default function PremierLeagueResults() {
       ) : (
         <Results fixtures={fixtures} />
       )}
+      <BacktestedExplainer />
     </>
   )
 }

@@ -1,74 +1,109 @@
 import type { ReactNode } from 'react'
-import { ArrowRightIcon } from './Icons'
-import { Tag } from './Tag'
 
 /*
- * Forecast next to result, always as two separate, labelled zones:
+ * Forecast beside result, everywhere on the site, in one visual language:
  *
  *   <PredictedActual>
- *     <PredictedZone>Home win · 54%</PredictedZone>
- *     <ActualZone verdict="hit">Home win · 2–1</ActualZone>
+ *     <PredictedZone>Home win <span className="font-mono">54%</span></PredictedZone>
+ *     <ActualZone>Home win <span className="font-mono">2–1</span></ActualZone>
+ *     <VerdictZone tone="hit">…</VerdictZone>
  *   </PredictedActual>
  *
- * PREDICTED is translucent glass (it was a probability, made before
- * kick-off). ACTUAL is a solid surface (it happened), with a hit/miss tag
- * that carries an icon and a word. The zones never share a background, and
- * each has its own visible label, so they cannot be read as one thing.
+ * - PREDICTED speaks in the cool, dashed, projected voice (`zone-predicted`,
+ *   `text-projected`, a mono label with a dashed ring). It was a probability.
+ * - ACTUAL is a solid raised surface (`zone-actual`) with a bold wide label
+ *   and a solid disc. It happened. Before kick-off pass `pending`.
+ * - VERDICT connects the two: hit (green, check), miss (red, cross) or
+ *   pending. Meaning never rests on colour: the caller puts a word and icon in it.
+ *
+ * Labels say only what is always true. In particular nothing here claims a
+ * forecast was made "before kick-off": backtested forecasts were generated
+ * afterwards (from data before their matchweek). Say so with an `aside`
+ * (e.g. the Backtested tag) where it applies.
  */
 
-export function PredictedActual({ children, className = '' }: { children: ReactNode; className?: string }) {
+export type Zone = 'predicted' | 'actual'
+
+/**
+ * The label that heads a Predicted or Actual zone. The two read apart even
+ * before the words are read: Predicted is a mono instrument readout with a
+ * dashed ring; Actual is the bold wide broadcast face with a solid disc.
+ */
+export function ZoneLabel({ zone, children, className = '' }: { zone: Zone; children?: ReactNode; className?: string }) {
+  if (zone === 'predicted') {
+    return (
+      <span className={`text-projected inline-flex items-center gap-1.5 font-mono text-[0.68rem] leading-none font-medium tracking-[0.14em] uppercase ${className}`}>
+        <svg aria-hidden="true" viewBox="0 0 10 10" className="size-2.5 shrink-0">
+          <circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeDasharray="2.1 1.6" />
+        </svg>
+        {children ?? 'Predicted'}
+      </span>
+    )
+  }
   return (
-    <div className={`grid items-stretch gap-2 sm:grid-cols-[1fr_auto_1fr] ${className}`}>{children}</div>
+    <span className={`inline-flex items-center gap-1.5 font-wide text-[0.64rem] leading-none font-bold tracking-[0.18em] text-white uppercase ${className}`}>
+      <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-white shadow-[0_0_8px_rgb(255_255_255/0.6)]" />
+      {children ?? 'Actual'}
+    </span>
   )
+}
+
+/** Lays zones out side by side from `sm` up (stacked on phones); a VerdictZone spans the row. */
+export function PredictedActual({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`grid gap-2 sm:grid-cols-2 [&>.verdict-zone]:sm:col-span-2 ${className}`}>{children}</div>
 }
 
 interface ZoneProps {
   children: ReactNode
-  /** Overrides the default label ("Predicted" / "Actual"). */
+  /** Replaces the default label ("Predicted" / "Actual"). */
   label?: ReactNode
-  /** Small qualifier after the label, e.g. "Before kick-off". */
-  when?: ReactNode
+  /** Sits at the end of the label row, e.g. a Backtested tag or a status. */
+  aside?: ReactNode
+  className?: string
 }
 
-function ZoneLabel({ label, when, children }: { label: ReactNode; when?: ReactNode; children?: ReactNode }) {
+function ZoneHead({ zone, label, aside }: { zone: Zone; label?: ReactNode; aside?: ReactNode }) {
   return (
-    <p className="flex items-center justify-between gap-2">
-      <span className="type-label text-[0.65rem] text-grey-400">
-        {label}
-        {when ? <span className="text-grey-500"> · {when}</span> : null}
-      </span>
+    <div className="flex min-h-6 items-center justify-between gap-2">
+      <ZoneLabel zone={zone}>{label}</ZoneLabel>
+      {aside}
+    </div>
+  )
+}
+
+export function PredictedZone({ children, label, aside, className = 'gap-3 p-3.5' }: ZoneProps) {
+  return (
+    <div className={`zone-predicted flex flex-col rounded-xl ${className}`}>
+      <ZoneHead zone="predicted" label={label} aside={aside} />
       {children}
-    </p>
+    </div>
   )
 }
 
-export function PredictedZone({ children, label = 'Predicted', when = 'Before kick-off' }: ZoneProps) {
+export function ActualZone({ children, label, aside, pending = false, className = 'gap-2.5 p-3.5' }: ZoneProps & { pending?: boolean }) {
   return (
-    <>
-      <div className="flex flex-col gap-2 rounded-xl border border-hairline bg-glass p-3.5">
-        <ZoneLabel label={label} when={when} />
-        <div className="text-sm text-white">{children}</div>
-      </div>
-      <span aria-hidden="true" className="hidden items-center text-grey-500 sm:flex">
-        <ArrowRightIcon className="size-3.5" />
-      </span>
-    </>
+    <div className={`zone-actual flex flex-col rounded-xl ${className}`} data-state={pending ? 'pending' : 'final'}>
+      <ZoneHead zone="actual" label={label} aside={aside} />
+      {children}
+    </div>
   )
 }
 
-interface ActualZoneProps extends ZoneProps {
-  /** Graded outcome. Leave out while the match is still to be played. */
-  verdict?: 'hit' | 'miss'
-}
+const VERDICT_TONE = {
+  hit: 'border-pitch/45 bg-pitch-dim/80 shadow-[inset_0_1px_0_0_rgb(60_240_140/0.25)]',
+  miss: 'border-miss/45 bg-miss-dim/80 shadow-[inset_0_1px_0_0_rgb(255_107_112/0.22)]',
+  pending: 'border-hairline bg-black/20',
+} as const
 
-export function ActualZone({ children, label = 'Actual', when = 'Full time', verdict }: ActualZoneProps) {
-  const rim = verdict === 'hit' ? 'border-l-pitch' : verdict === 'miss' ? 'border-l-miss' : 'border-l-grey-700'
+export type VerdictTone = keyof typeof VERDICT_TONE
+
+/** The verdict strip: hit, miss or still to come. Put a word (and icon) inside; colour only backs it up. */
+export function VerdictZone({ tone, children, className = '' }: { tone: VerdictTone; children: ReactNode; className?: string }) {
   return (
-    <div className={`flex flex-col gap-2 rounded-xl border border-l-2 border-hairline bg-grey-900 p-3.5 ${rim}`}>
-      <ZoneLabel label={label} when={when}>
-        {verdict ? <Tag tone={verdict}>{verdict === 'hit' ? 'Right' : 'Wrong'}</Tag> : null}
-      </ZoneLabel>
-      <div className="text-sm text-white">{children}</div>
+    <div
+      className={`verdict-zone flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-xl border px-3.5 py-3 ${VERDICT_TONE[tone]} ${className}`}
+    >
+      {children}
     </div>
   )
 }

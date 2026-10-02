@@ -23,7 +23,7 @@ const rps4 = (v: number) => v.toFixed(4)
  * scores, with the honest notes about draws and small samples.
  */
 export function ResultsSummary({ summary, scope }: { summary: Summary; scope: string }) {
-  const { hits, n, pct, byActual, meanRps, exactScores } = summary
+  const { hits, n, pct, byActual, meanRps, exactScores, backtested } = summary
   return (
     <section aria-labelledby="results-summary-heading" className="mt-12 md:mt-16">
       <Panel className="p-5 sm:p-7 lg:p-10">
@@ -64,8 +64,9 @@ export function ResultsSummary({ summary, scope }: { summary: Summary; scope: st
               ))}
             </ul>
             <p className="mt-4 text-[0.8rem] leading-relaxed text-grey-400">
-              Draws at {byActual.D.n ? '0%' : '–'} are expected: the call is the single most likely outcome, and that is
-              almost never a draw.
+              {byActual.D.n && byActual.D.hits === 0
+                ? 'No draw called right, as expected: the call is the single most likely outcome, and that is almost never a draw.'
+                : 'Draws are rarely called right: the call is the single most likely outcome, and that is almost never a draw.'}
             </p>
           </div>
 
@@ -76,18 +77,31 @@ export function ResultsSummary({ summary, scope }: { summary: Summary; scope: st
               <span className="font-mono text-[2.4rem] leading-none font-semibold text-white tabular-nums">
                 {meanRps === null ? '–' : rps4(meanRps)}
               </span>
-              <span className="text-[0.82rem] text-grey-400">mean over these {n} matches · lower is better</span>
+              <span className="text-[0.82rem] text-grey-400">
+                mean over {n === 1 ? 'this match' : `these ${n} matches`} · lower is better
+              </span>
             </p>
             {meanRps !== null ? <RpsStrip value={meanRps} /> : null}
           </div>
         </div>
 
         <div className="mt-9 grid gap-3 border-t border-hairline pt-6 text-[0.88rem] leading-relaxed text-grey-200 lg:grid-cols-2 lg:gap-10">
-          <p>
-            The model gives every match a probability for all three outcomes. A single call, its most likely outcome,
-            rarely lands on a draw, because a draw is seldom any match’s single most likely result. That is why the
-            probabilities and RPS are shown, not just the call.
-          </p>
+          <div className="flex flex-col gap-3">
+            <p>
+              The model gives every match a probability for all three outcomes. A single call, its most likely outcome,
+              rarely lands on a draw, because a draw is seldom any match’s single most likely result. That is why the
+              probabilities and RPS are shown, not just the call.
+            </p>
+            {backtested > 0 ? (
+              <p className="text-grey-400">
+                <span className="font-semibold text-grey-200">
+                  {backtested === n ? `All ${n}` : `${backtested} of ${n}`} {n === 1 ? 'forecast is' : 'forecasts are'} backtested:
+                </span>{' '}
+                made after the match, from data before its matchweek, because the site went live after those
+                matches were played. Each match is graded on its latest forecast dated at or before kick-off.
+              </p>
+            ) : null}
+          </div>
           {n < SMALL_SAMPLE ? (
             <p className="text-grey-400">
               <span className="font-semibold text-grey-200">Small sample.</span> With {n}{' '}

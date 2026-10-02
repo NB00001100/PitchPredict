@@ -31,7 +31,7 @@ function revealCarousel() {
  * the honest note about draws.
  */
 export function SeasonPanel({ season }: { season: SeasonSummary }) {
-  const { rate, weeks, drawnMisses } = season
+  const { rate, weeks, drawnMisses, complete } = season
   const verdict = seasonVerdict(rate.pct, rate.total)
   const range = expectedRange(rate.total)
   const misses = rate.total - rate.hits
@@ -55,13 +55,13 @@ export function SeasonPanel({ season }: { season: SeasonSummary }) {
         <MatchweekBars weeks={weeks} onJump={revealCarousel} />
 
         <p className="mt-9 max-w-[46rem] text-[0.9rem] leading-relaxed text-grey-200">
-          The pick is the model’s most likely outcome, and that is never a draw: a draw is almost never the single
-          most likely result of a match. So every drawn match counts as a miss
+          The pick is the model’s most likely outcome, and a draw is almost never the single most likely result of a
+          match. So drawn matches almost always count as misses
           {rate.total > 0 ? (
             <>
               {' '}
               (<span className="font-mono text-white tabular-nums">{drawnMisses}</span> of the{' '}
-              <span className="font-mono text-white tabular-nums">{misses}</span> misses so far)
+              <span className="font-mono text-white tabular-nums">{misses}</span> misses{complete ? '' : ' so far'})
             </>
           ) : null}
           .{range && rate.total < seasonMatches ? ' Small samples swing a lot, so read the needle against the bracket.' : ''}{' '}

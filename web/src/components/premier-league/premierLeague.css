@@ -2,43 +2,9 @@
  * Premier League page: page-specific surfaces and motion. Composed from the
  * design tokens in index.css; nothing here is shared with other pages.
  *
- * Two visual languages, used at fixture and matchweek level alike:
- * - PREDICTED is projected data: a cool blueprint dot grid behind a dashed
- *   outline, numbers in mono. The cool tint is the atmosphere's floodlight
- *   blue (rgb 150 200 255), never the pitch-green accent.
- * - ACTUAL is the record: an opaque raised surface, solid border, a bright
- *   top edge, the score in the bold display face.
+ * The Predicted / Actual surfaces (zone-predicted, zone-actual,
+ * text-projected) are shared site-wide and live in index.css.
  */
-
-.pl-projected {
-  --pl-cool: rgb(150 200 255);
-  position: relative;
-  border: 1px dashed rgb(150 200 255 / 0.32);
-  background-color: rgb(150 200 255 / 0.025);
-  background-image: radial-gradient(rgb(150 200 255 / 0.16) 0.75px, transparent 1px);
-  background-size: 10px 10px;
-  background-position: -5px -5px;
-}
-
-/* Text in the cool "projected" voice: 11.9:1 on the page base. */
-.pl-cool-text {
-  color: rgb(196 222 255);
-}
-
-.pl-actual {
-  position: relative;
-  background-color: var(--color-grey-800);
-  border: 1px solid var(--color-hairline-strong);
-  box-shadow:
-    inset 0 1px 0 0 rgb(255 255 255 / 0.14),
-    0 10px 24px -14px rgb(0 0 0 / 0.9);
-}
-
-/* A not-yet-played Actual zone keeps its solid frame, quieter. */
-.pl-actual[data-state='pending'] {
-  background-color: rgb(22 32 29 / 0.55);
-  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.06);
-}
 
 /* ---------- Entrances (transform and opacity only) ---------- */
 

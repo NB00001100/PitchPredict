@@ -6,21 +6,21 @@ import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion'
 import { PitchLines } from '../PitchLines'
 
 interface PageHeroProps {
-  /** Small wide-caps line above the title. */
+  /** Small wide-caps line above the title, e.g. "Forecasts · 2026/27 season" (the season comes from the data). */
   eyebrow?: ReactNode
   lede?: ReactNode
-  /** Quiet status line under the tabs, e.g. "Results through matchweek 5 · updated 2 min ago". */
+  /** Quiet status line under the tabs, e.g. "Latest results: matchweek 5 · updated 2 min ago". */
   status?: ReactNode
 }
 
 const DEFAULT_LEDE =
-  'Every match gets a home, draw and away chance before kickoff. After full time, each pick is graded against what actually happened. The model doesn’t beat the bookmakers, and this page shows where it stands.'
+  'Every match gets a home, draw and away chance before kick-off. After full time, each pick is graded against what actually happened. The model doesn’t beat the bookmakers, and this page shows where it stands.'
 
 /**
  * The Premier League pages' opening: eyebrow, title, lede, the switch
  * between the two views, and a pitch drawn faintly in floodlight behind.
  */
-export function PageHero({ eyebrow = 'Forecasts · 2026/27 season', lede = DEFAULT_LEDE, status }: PageHeroProps) {
+export function PageHero({ eyebrow = 'Forecasts', lede = DEFAULT_LEDE, status }: PageHeroProps) {
   const reduced = usePrefersReducedMotion()
   const rise = (delay: number) =>
     reduced

@@ -9,7 +9,13 @@ interface MatchweekBarsProps {
   onJump?: (matchweek: number) => void
 }
 
-/** Phones fold the season into two rows of 19; wider screens show all 38 in one. */
+/*
+ * Columns per row. Each played week is a button, so a column must stay at
+ * least 24px wide (WCAG 2.5.8): phones fold the season into rows of 10,
+ * tablets into two rows of 19, and only from 1024px (where 38 columns are
+ * 24px or more) does it run in one row.
+ */
+const ROW_XS = 10
 const ROW_SM = 19
 const ROW_LG = 38
 
@@ -22,7 +28,7 @@ const ROW_LG = 38
  * carries its numbers, and hover or focus shows them in a tooltip.
  */
 export function MatchweekBars({ weeks, onJump }: MatchweekBarsProps) {
-  const { selected, current, go } = useMatchweekNav()
+  const { selected, current, seasonOver, go } = useMatchweekNav()
 
   return (
     <div>
@@ -39,11 +45,11 @@ export function MatchweekBars({ weeks, onJump }: MatchweekBarsProps) {
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="size-2.5 rounded-[3px] border border-pitch/70" />
-            This week
+            {seasonOver ? 'Final matchweek' : 'This week'}
           </span>
         </p>
       </div>
-      <ol aria-label="Correct picks by matchweek" className="mt-5 grid grid-cols-19 gap-y-5 sm:grid-cols-38">
+      <ol aria-label="Correct picks by matchweek" className="mt-5 grid grid-cols-10 gap-y-5 sm:grid-cols-19 lg:grid-cols-38">
         {weeks.map((week, i) => {
           const { matchweek, rate } = week
           const graded = rate.total > 0 && rate.pct !== null
@@ -56,7 +62,7 @@ export function MatchweekBars({ weeks, onJump }: MatchweekBarsProps) {
                 <Plot>
                   <span className="absolute bottom-0 left-1/2 size-[3px] -translate-x-1/2 rounded-full bg-grey-700" />
                 </Plot>
-                <span className="font-mono text-[0.6rem] leading-none text-grey-500/60 tabular-nums">{matchweek}</span>
+                <span className="font-mono text-[0.6rem] leading-none text-grey-500 tabular-nums">{matchweek}</span>
               </li>
             )
           }
@@ -119,7 +125,7 @@ export function MatchweekBars({ weeks, onJump }: MatchweekBarsProps) {
 /** The column's frame: zero baseline, and the long-run reference line running through every slot. */
 function Plot({ children, selected = false }: { children: ReactNode; selected?: boolean }) {
   return (
-    <span className={`relative block h-16 w-full border-b border-grey-700 sm:h-20 ${selected ? 'rounded-t-md bg-white/[0.06]' : ''}`}>
+    <span className={`relative block h-14 w-full border-b border-grey-700 sm:h-16 lg:h-20 ${selected ? 'rounded-t-md bg-white/[0.06]' : ''}`}>
       <span className="absolute inset-x-0 h-px bg-white/30" style={{ bottom: `${MODEL_BACKTEST_PCT}%` }} />
       {children}
     </span>
@@ -128,9 +134,11 @@ function Plot({ children, selected = false }: { children: ReactNode; selected?: 
 
 /** Keeps tooltips at either end of a row inside the chart. */
 function edgeClasses(i: number): string {
+  const xs = i % ROW_XS
   const sm = i % ROW_SM
   const lg = i % ROW_LG
-  const small = sm < 2 ? 'left-0' : sm > ROW_SM - 3 ? 'right-0' : 'left-1/2 -translate-x-1/2'
-  const large = lg < 2 ? 'sm:left-0 sm:right-auto sm:translate-x-0' : lg > ROW_LG - 3 ? 'sm:right-0 sm:left-auto sm:translate-x-0' : 'sm:left-1/2 sm:right-auto sm:-translate-x-1/2'
-  return `${small} ${large}`
+  const phone = xs < 2 ? 'left-0' : xs > ROW_XS - 3 ? 'right-0' : 'left-1/2 -translate-x-1/2'
+  const tablet = sm < 2 ? 'sm:left-0 sm:right-auto sm:translate-x-0' : sm > ROW_SM - 3 ? 'sm:right-0 sm:left-auto sm:translate-x-0' : 'sm:left-1/2 sm:right-auto sm:-translate-x-1/2'
+  const wide = lg < 2 ? 'lg:left-0 lg:right-auto lg:translate-x-0' : lg > ROW_LG - 3 ? 'lg:right-0 lg:left-auto lg:translate-x-0' : 'lg:left-1/2 lg:right-auto lg:-translate-x-1/2'
+  return `${phone} ${tablet} ${wide}`
 }
