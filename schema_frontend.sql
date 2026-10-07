@@ -1,4 +1,13 @@
 -- What the website reads: public, read-only access to fixtures and forecasts.
+--
+-- This file IS the read-only row-level security setup for the browser. The website uses
+-- the publishable (anon) key, which acts as the `anon` role. After running it:
+--   * anon/authenticated can SELECT current_fixtures, predictions and the
+--     matchweek_predictions view (one "public read" policy per table, using (true));
+--   * there are no insert/update/delete policies, so only the service-role key used by
+--     GitHub Actions can write;
+--   * matches has RLS on and no policies, so the training data stays private (the
+--     Supabase linter reports this as INFO; that is intended).
 
 -- Forecasts for already-played matchweeks, made after the fact from data before
 -- that matchweek's first kickoff (backfill_predictions.py), are flagged.
@@ -44,3 +53,10 @@ create policy "public read" on current_fixtures for select to anon, authenticate
 
 drop policy if exists "public read" on predictions;
 create policy "public read" on predictions for select to anon, authenticated using (true);
+
+-- Verify (run in the SQL editor):
+-- select tablename, policyname, cmd, roles from pg_policies where schemaname = 'public' order by 1, 2;
+-- Expected: exactly two rows, both cmd = SELECT, roles = {anon,authenticated}:
+--   current_fixtures | public read | SELECT | {anon,authenticated}
+--   predictions      | public read | SELECT | {anon,authenticated}
+-- and no row for matches.

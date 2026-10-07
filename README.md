@@ -40,7 +40,8 @@ gets most of the way to the market from goals alone.
 
 ## Data
 
-Three tables in Supabase (DDL in `schema.sql` and `schema_predictions.sql`):
+Three tables in Supabase (DDL in `schema.sql` and `schema_predictions.sql`; the website's
+read-only access and the `matchweek_predictions` view are in `schema_frontend.sql`):
 
 | Table | Rows | Contents | Role |
 |---|---:|---|---|
@@ -162,9 +163,12 @@ place by lowering out-of-sample RPS in this harness.
   predictions for the upcoming matchweek.
 - **Stubbed:** a stacking layer for extra covariates (interface only, in
   `optimize.py`).
-- **Scheduled refresh:** `refresh.py` runs every Tuesday and Friday via GitHub Actions;
-  see [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
-- **Planned:** API endpoint, frontend.
+- **Automation:** two GitHub Actions workflows. `run_week.py` runs daily and forecasts
+  the next matchweek once the one before it has been played; `update_results.py` runs
+  every 15 minutes and pulls in final scores. See [Weekly automation](#weekly-automation)
+  and [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+- **Website:** a Vite + React app in `web/` that reads Supabase directly from the
+  browser, deployed on Vercel. See [Deploy to Vercel](#deploy-to-vercel).
 
 ## Setup
 
@@ -182,11 +186,11 @@ cp .env.example .env    # then fill in the three values
 | Variable | What it is |
 |---|---|
 | `SUPABASE_URL` | Your project URL |
-| `SUPABASE_KEY` | Service-role key (server-side only; the tables have row-level security on with no public policies) |
+| `SUPABASE_KEY` | Service-role (secret) key: server-side only, it bypasses row-level security. The publishable key does not work here |
 | `FOOTBALL_DATA_API_KEY` | Free key from football-data.org |
 
-Create the tables by running `schema.sql` and `schema_predictions.sql` in the Supabase
-SQL editor, then:
+Create the tables by running `schema.sql`, `schema_predictions.sql` and
+`schema_frontend.sql` in the Supabase SQL editor, then:
 
 ```bash
 # 1. Load data (both accept --dry-run)
@@ -201,14 +205,178 @@ SQL editor, then:
 # 3. Predict fixtures kicking off in the next 8 days
 .venv/bin/python fit_predict.py         # --dry-run to print without storing, --days N
 
-# Or all of the above data + forecast steps at once (what the scheduled job runs)
-.venv/bin/python refresh.py             # --dry-run supported
+# Or the scheduled jobs (both accept --dry-run)
+.venv/bin/python run_week.py            # fetch, ingest, decide, forecast if due, backfill
+.venv/bin/python update_results.py      # pull final scores for kicked-off fixtures
 
 # Model self-checks
 .venv/bin/python dixon_coles.py
 .venv/bin/python test_vs_penaltyblog.py
 .venv/bin/python backtest.py --self-test
+.venv/bin/python test_run_week.py       # the decision rules, no database needed
+.venv/bin/python test_update_results.py
 ```
+
+## Weekly automation
+
+Two GitHub Actions workflows keep the data current. Neither needs a person, and neither
+trusts the clock: GitHub's cron is UTC, can start late or be skipped, and is switched off
+after 60 days without repository activity. So each script looks at the fixture list and
+decides for itself whether there is work to do.
+
+| Workflow | Script | Schedule (UTC) | What it does |
+|---|---|---|---|
+| Predict next matchweek (`predict.yml`) | `run_week.py` | Daily at 06:00 | Refreshes fixtures and training data, forecasts the next matchweek if it is due, backfills, summarises |
+| Update results (`results.yml`) | `update_results.py` | Every 15 minutes | Pulls final scores for fixtures that kicked off more than 2 h ago |
+
+Both can also be started by hand from the Actions tab, with a "Dry run" box.
+
+### Predict next matchweek
+
+`run_week.py` runs eight steps in order: fetch fixtures and results, ingest match
+results, check team names, report staleness, decide, forecast the round (only if due),
+backfill, summary. The summary goes to the run page and starts with **ACTED** or
+**SKIPPED** and the reason. A skip exits 0; the first failing step exits 1.
+
+The decision, in brief. The round is the upcoming fixtures of the matchweek of the next
+kickoff, within 6 days of it. The run forecasts it only if:
+
+- **A.** No fixture of that matchweek has kicked off. Forecasts are never written or
+  rewritten after a matchweek starts. (A rescheduled fixture played apart from its
+  matchweek is forecast as a round of its own.)
+- **B.** Every fixture of an earlier matchweek that kicked off before the round has
+  finished. Postponed and suspended fixtures never block.
+- **C.** Some fixture in the round has no real forecast made before kickoff. Only those
+  are forecast; if all have one, the run skips.
+
+The run fits on `matches` plus any result that football-data.org has and
+football-data.co.uk has not published yet. Before fitting it stops if anything in the
+training data kicked off at or after the round's first kickoff, if a fixture being
+forecast is in the training data, or if a fixture being forecast has already kicked off.
+There is no flag to override these checks.
+
+In a normal week, a weekend matchweek ends on Monday night and the Tuesday 06:00 run
+forecasts the next one, about four days ahead. After a midweek round that ends on
+Thursday night, Friday 06:00 forecasts Saturday's round, with Saturday 06:00 as the
+fallback. The full rules are in the docstring of [`run_week.py`](run_week.py); day-to-day
+operation is in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+### Update results
+
+`update_results.py` asks Supabase for current-season fixtures that kicked off between
+7 days and 2 hours ago and have no final status yet. Most runs find none and exit in
+seconds without calling football-data.org. Otherwise it makes one API call, upserts
+status and scores for the whole season into `current_fixtures`, and reports which of
+the pending fixtures are now FINISHED. Free-tier scores arrive minutes to hours after
+full time, so "still pending" is normal; the next run retries. It never refits the
+model and never touches `predictions`.
+
+### GitHub secrets
+
+Add these under **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `SUPABASE_URL` | Your project URL |
+| `SUPABASE_KEY` | The service-role key: Supabase dashboard → Project Settings → API keys, the `sb_secret_…` secret key or the legacy `service_role` JWT |
+| `FOOTBALL_DATA_API_KEY` | Your free key from football-data.org |
+
+The service-role key bypasses row-level security. Only the Actions use it; the website
+never does. If `SUPABASE_KEY` holds the publishable key by mistake, `matches` reads as
+empty (the team-name check fails, saying teams never appear in `matches`) and every
+upsert is rejected by RLS.
+
+Both workflows share the concurrency group `supabase-writes`, so they never write to
+Supabase at the same time. A queued run replaced by a newer one shows as cancelled;
+that is harmless.
+
+### Cost
+
+This repository is public, so Actions minutes are free and polling every 15 minutes
+costs nothing. In a private repository it would: even a run that does nothing spends
+about 30 to 60 seconds on checkout, Python setup and `pip install`, and every 15 minutes
+is about 2,900 runs a month, which can approach or exceed the 2,000 free minutes. The
+options are a slower poll (`*/30 * * * *`) or a cron limited to match windows, such as
+`*/15 12-23 * * 6,0` plus `*/15 18-23 * * 1-5` (both commented in `results.yml`). The
+tradeoff is slower result updates against runner minutes.
+
+## Deploy to Vercel
+
+The website in `web/` is a Vite + React app with no server of its own. The browser reads
+Supabase directly with `@supabase/supabase-js`. It needs two environment variables:
+
+| Variable | Value |
+|---|---|
+| `VITE_SUPABASE_URL` | Your project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | The publishable key: Supabase dashboard → Project Settings → API keys, the `sb_publishable_…` key or the legacy `anon` JWT |
+
+Both forms of the publishable key act as the `anon` role. For local development, copy
+`web/.env.example` to `web/.env.local` and run `npm run dev` in `web/`.
+
+To deploy from GitHub:
+
+1. On vercel.com/new, import `NB00001100/PitchPredict`.
+2. Framework Preset **Vite**, Root Directory **`web`**, Build Command `npm run build`,
+   Output Directory `dist`.
+3. Under Project Settings → Environment Variables, add the two `VITE_*` variables.
+4. Deploy. From then on every push to `main` redeploys.
+
+`web/vercel.json` already sends every route to `index.html`, so direct links such as
+`/premier-league/results` work, and caches `/assets` for a year. Nothing else is needed.
+
+**Current state.** A Vercel project, `pitchpredict-web`, is live at
+https://pitchpredict-web.vercel.app with both variables set. It was deployed from the
+CLI and is not connected to GitHub, so pushes to `main` do not redeploy it yet. To fix
+that, open the project in the Vercel dashboard, connect `NB00001100/PitchPredict` under
+Settings → Git, and set Settings → General → Root Directory to `web`. Until then, deploy
+by hand with `cd web && vercel --prod`.
+
+**Read-only by design.** `schema_frontend.sql` grants the browser key SELECT on
+`current_fixtures`, `predictions` and the `matchweek_predictions` view, with one
+`"public read"` policy per table and no insert, update or delete policies. `matches`
+has row-level security on and no policies, so the browser cannot read the training
+data at all.
+
+**Keys that never go in `web/`:** the service-role key and `FOOTBALL_DATA_API_KEY`. Any
+`VITE_*` variable is compiled into the public JavaScript, so only the publishable key
+belongs there.
+
+## How to verify
+
+1. **Forecasting.** Add the three secrets and push. In Actions → **Predict next
+   matchweek** → Run workflow, tick "Dry run" for the first run, then run it for real.
+   The run summary says ACTED or SKIPPED and why. Check what has been stored:
+
+   ```sql
+   select matchweek, count(*), max(predicted_at)
+   from predictions where is_backfill = false
+   group by 1 order by 1 desc;
+   ```
+
+   SKIPPED is the honest outcome on any day when the next matchweek is already
+   forecast. With matchweeks 1 to 5 finished and matchweek 6 already forecast, the first
+   real run will skip ("matchweek 6 already forecast" or "matchweek 6 is under way") and
+   backfill nothing new. The first ACTED run comes after matchweek 6 finishes, and adds
+   a new `matchweek` row to the query above.
+
+2. **Results.** During or after a match, run Actions → **Update results** → Run
+   workflow. Fixtures that kicked off more than 2 hours ago should get scores and status
+   FINISHED (if football-data.org has them yet):
+
+   ```sql
+   select matchweek, home_team, home_goals, away_goals, away_team, status, updated_at
+   from current_fixtures
+   where kickoff > now() - interval '3 days'
+   order by kickoff;
+   ```
+
+   Outside match windows the run says there are no fixtures awaiting a result and makes
+   no API call.
+
+3. **Website.** Deploy to Vercel and load the site. The Premier League page shows the
+   next matchweek's forecasts, and its Results view shows predicted against actual
+   results with hits graded. If the page shows a configuration error instead, the two
+   `VITE_*` variables are missing from the Vercel project.
 
 ## Repository layout
 
@@ -218,12 +386,18 @@ SQL editor, then:
 | `shrinkage.py` | Promoted-team prior and the two-stage fit |
 | `backtest.py` | Walk-forward harness, metrics, baselines, report |
 | `optimize.py` | Hyperparameter grid search; stacking stub |
-| `refresh.py` | The weekly update end to end (see `docs/OPERATIONS.md`) |
+| `run_week.py` | The daily pipeline; decides whether a matchweek is due (see `docs/OPERATIONS.md`) |
+| `update_results.py` | Pulls final scores every 15 minutes; never touches forecasts |
 | `fit_predict.py` | Production fit and stored predictions |
 | `backfill_predictions.py` | After-the-fact forecasts for finished fixtures that lack a real one |
 | `seasons.py`, `teams.py` | Current season from the date; fixture -> model team names and their check |
 | `season_holdout.py` | Previous-seasons-only test for one season |
 | `ingest_matches.py`, `fetch_fixtures.py` | Data ingestion |
 | `db.py` | Supabase loaders |
+| `schema.sql`, `schema_predictions.sql` | Table DDL |
+| `schema_frontend.sql` | Read-only browser access (RLS policies) and the `matchweek_predictions` view |
+| `test_run_week.py`, `test_update_results.py` | Tests for the decision rules and the results poller |
+| `.github/workflows/` | `predict.yml` (daily) and `results.yml` (every 15 minutes) |
+| `web/` | The website (Vite + React) |
 | `model_config.json` | Tuned hyperparameters |
 | `backtest_report.md` | Full evaluation results |

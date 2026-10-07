@@ -38,7 +38,7 @@ from seasons import CURRENT_SEASON
 TABLE = "current_fixtures"
 COLUMNS = "id,matchweek,kickoff,status,home_team,away_team"
 GRACE_HOURS = 2  # a match lasts ~2 h with stoppages; free-tier scores land after that
-STALE_DAYS = 7   # not final a week after kickoff: polling won't fix it; left to the daily fetch
+STALE_DAYS = 7   # not final a week after kickoff: polling won't fix it; left to the daily run
 # Statuses that will not change by polling. FINISHED/POSTPONED/CANCELLED are the obvious
 # ones; SUSPENDED and AWARDED are terminal for our purposes too, otherwise one abandoned
 # or awarded match would trigger an API call every 15 minutes for the rest of the season.
@@ -119,7 +119,7 @@ def main():
     stale = stale_count(sb, now, args.stale_days)
     if stale:
         print(f"WARNING: {stale} fixture(s) kicked off more than {args.stale_days:g} days ago and are "
-              "still not final; left to the daily refresh")
+              "still not final; left to the daily run (predict.yml)")
 
     pending = pending_fixtures(sb, now, args.grace_hours, args.stale_days)
     if not pending:
