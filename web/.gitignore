@@ -27,3 +27,5 @@ dist-ssr
 e2e/.dist
 playwright-report
 test-results
+.vercel
+.env*
