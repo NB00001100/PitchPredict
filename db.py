@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 PAGE = 1000  # PostgREST returns at most 1000 rows per request
+FORECAST_CHUNK = 200  # fixture ids per `in` filter in load_forecasts
 
 
 def get_client():
@@ -35,13 +36,11 @@ def load_matches(sb=None):
     """All played matches, oldest first, with the columns dixon_coles.py expects
     (date, home_team, away_team, home_goals, away_goals) plus season and odds."""
     sb = sb or get_client()
-    rows = _fetch_all(
-        sb, "matches",
-        "id,season,kickoff,home_team,away_team,home_goals,away_goals,"
-        "odds_home,odds_draw,odds_away",
-        "id",  # unique, so paging is stable
-    )
-    df = pd.DataFrame(rows)
+    cols = "id,season,kickoff,home_team,away_team,home_goals,away_goals,odds_home,odds_draw,odds_away"
+    rows = _fetch_all(sb, "matches", cols, "id")  # id is unique, so paging is stable
+    # columns= so that no rows (an empty table, or a key that RLS hides `matches` from)
+    # gives an empty frame with the expected columns rather than a KeyError below.
+    df = pd.DataFrame(rows, columns=cols.split(","))
     df = df.dropna(subset=["home_goals", "away_goals"])
     df["date"] = pd.to_datetime(df["kickoff"], utc=True, format="ISO8601")
     df = df.drop(columns="kickoff")
@@ -86,6 +85,36 @@ def load_all_fixtures(sb=None, season=None):
     df["kickoff"] = pd.to_datetime(df["kickoff"], utc=True, format="ISO8601")
     df[["home_goals", "away_goals"]] = df[["home_goals", "away_goals"]].astype("Int64")  # null until FINISHED
     return df.sort_values(["kickoff", "id"]).reset_index(drop=True)
+
+
+def load_forecasts(sb=None, fixture_ids=()):
+    """Forecast rows (fixture_id, predicted_at, is_backfill) in `predictions` for the given
+    fixture ids, every model version and every run. Empty frame with those columns if none.
+
+    Queried in chunks of ids (a long `in` list would overflow the request URL) and paged
+    within each chunk, since every forecast run adds rows.
+    """
+    sb = sb or get_client()
+    cols = ["fixture_id", "predicted_at", "is_backfill"]
+    ids = sorted({int(i) for i in fixture_ids})
+    rows = []
+    for k in range(0, len(ids), FORECAST_CHUNK):
+        chunk, start = ids[k:k + FORECAST_CHUNK], 0
+        while True:
+            page = (
+                sb.table("predictions").select(",".join(cols)).in_("fixture_id", chunk)
+                .order("fixture_id").order("model_version").order("predicted_at")
+                .range(start, start + PAGE - 1).execute().data
+            )
+            rows.extend(page)
+            if len(page) < PAGE:
+                break
+            start += PAGE
+    df = pd.DataFrame(rows, columns=cols)
+    df["fixture_id"] = df["fixture_id"].astype("int64")
+    df["predicted_at"] = pd.to_datetime(df["predicted_at"], utc=True, format="ISO8601")
+    df["is_backfill"] = df["is_backfill"].astype(bool)
+    return df
 
 
 def load_view(sb=None, season=None):

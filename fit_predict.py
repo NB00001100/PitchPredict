@@ -13,8 +13,9 @@ predictions back. No fixtures in the window (an international break) is not an e
 Teams promoted this season are fit with the shrinkage prior from shrinkage.py
 (strength `shrink` from model_config.json; 0 = plain fit).
 
-refresh.py runs this after refreshing current_fixtures and matches; run standalone,
-the caller is assumed to have refreshed them first.
+The scheduled pipeline does not use this date window: run_week.py decides which
+matchweek is due and calls forecast() below with its own training set and fixtures.
+Run standalone, the caller is assumed to have refreshed current_fixtures and matches.
 """
 
 import argparse
@@ -150,6 +151,54 @@ def print_predictions(preds):
               f"{p['exp_home_goals']:5.2f} {p['exp_away_goals']:5.2f} {p['modal_score']:>5}")
 
 
+def forecast(sb, df, fixtures, season_fixtures, predicted_at, dry_run=False, params=None):
+    """Fit on `df`, predict `fixtures`, write one forecast set stamped `predicted_at`.
+
+    df: training matches (load_matches columns); everything in it is fitted on, so the
+        caller decides what may be in it. season_fixtures: all current_fixtures rows of
+        the season (team-name and promoted-team checks). params: (xi, shrink), else read
+        from model_config.json. Writes nothing when dry_run. Returns a summary dict.
+    """
+    xi, shrink = params if params is not None else load_params()
+    model_version = model_version_for(xi, shrink)
+    predicted_at = pd.Timestamp(predicted_at)
+    summary = {"model_version": model_version, "predicted_at": predicted_at,
+               "fixtures": len(fixtures), "written": 0, "predictions": []}
+
+    if not check_team_names(season_fixtures, df, CURRENT_SEASON, now=predicted_at):
+        sys.exit("ERROR: fix teams.py (see above) before predicting")
+
+    # Fit once on everything in df, current season included; promoted teams shrunk.
+    ref_date = df["date"].max()
+    promoted = promoted_model_names(season_fixtures, df, PREVIOUS_SEASON)
+    model = fit_with_promoted_prior(df, ref_date, xi, shrink, promoted)
+    print_shrinkage(model, promoted, shrink)
+    check_ratings(model, df, fixtures, season_fixtures)
+
+    preds = predict_fixtures(model, fixtures)
+    print_predictions(preds)
+    summary["predictions"] = preds
+    # Callers select only future fixtures; asserted because the view only ever shows
+    # forecasts made at or before kickoff.
+    assert all(p["kickoff"] > predicted_at for p in preds), "forecast after kickoff"
+
+    rows = [{k: v for k, v in p.items() if k != "kickoff"}
+            | {"model_version": model_version, "predicted_at": predicted_at.isoformat()}
+            for p in preds]
+
+    if dry_run:
+        print(f"\nDry run: {len(rows)} rows not written ({model_version}, predicted_at {predicted_at.isoformat()}).")
+        return summary
+
+    # predicted_at is part of the key, so each run appends a new forecast set instead of
+    # overwriting earlier ones; that history is what lets us measure skill by lead time.
+    # The matchweek_predictions view shows only the latest one made before kickoff.
+    sb.table(TABLE).upsert(rows, on_conflict="fixture_id,model_version,predicted_at").execute()
+    print(f"\nUpserted {len(rows)} rows into {TABLE} ({model_version}, predicted_at {predicted_at.isoformat()}).")
+    summary["written"] = len(rows)
+    return summary
+
+
 def run(sb=None, dry_run=False, days=DEFAULT_DAYS, now=None):
     """Forecast every fixture in the window. Returns a small summary dict.
 
@@ -184,35 +233,8 @@ def run(sb=None, dry_run=False, days=DEFAULT_DAYS, now=None):
           f"(matchweek {', '.join(map(str, weeks))}; {fixtures['kickoff'].min():%Y-%m-%d %H:%M} to "
           f"{fixtures['kickoff'].max():%Y-%m-%d %H:%M} UTC)")
 
-    if not check_team_names(season_fixtures, df, CURRENT_SEASON, now=predicted_at):
-        sys.exit("ERROR: fix teams.py (see above) before predicting")
-
-    # Fit once on everything played, current season included; promoted teams shrunk.
-    promoted = promoted_model_names(season_fixtures, df, PREVIOUS_SEASON)
-    model = fit_with_promoted_prior(df, ref_date, xi, shrink, promoted)
-    print_shrinkage(model, promoted, shrink)
-    check_ratings(model, df, fixtures, season_fixtures)
-
-    preds = predict_fixtures(model, fixtures)
-    print_predictions(preds)
-    # Selection guarantees this; asserted because the view only ever shows forecasts
-    # made at or before kickoff.
-    assert all(p["kickoff"] > predicted_at for p in preds), "forecast after kickoff"
-
-    rows = [{k: v for k, v in p.items() if k != "kickoff"}
-            | {"model_version": model_version, "predicted_at": predicted_at.isoformat()}
-            for p in preds]
-
-    if dry_run:
-        print(f"\nDry run: {len(rows)} rows not written ({model_version}, predicted_at {predicted_at.isoformat()}).")
-        return summary
-
-    # predicted_at is part of the key, so each run appends a new forecast set instead of
-    # overwriting earlier ones; that history is what lets us measure skill by lead time.
-    # The matchweek_predictions view shows only the latest one made before kickoff.
-    sb.table(TABLE).upsert(rows, on_conflict="fixture_id,model_version,predicted_at").execute()
-    print(f"\nUpserted {len(rows)} rows into {TABLE} ({model_version}, predicted_at {predicted_at.isoformat()}).")
-    summary["written"] = len(rows)
+    result = forecast(sb, df, fixtures, season_fixtures, predicted_at, dry_run, params=(xi, shrink))
+    summary["written"] = result["written"]
     return summary
 
 

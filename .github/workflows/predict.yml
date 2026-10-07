@@ -1,0 +1,57 @@
+# Daily forecasting run: refresh fixtures/results and training data, forecast the next
+# matchweek if it is due, backfill, summarise. See docs/OPERATIONS.md.
+#
+# GitHub's cron is UTC, may run late or be skipped under load, and GitHub disables
+# scheduled workflows in a repository with no activity for 60 days (re-enable it from
+# the Actions tab). That is why run_week.py decides for itself every day whether a
+# matchweek is due instead of being timed to a deadline: a missed day costs nothing as
+# long as one run lands before the matchweek's first kickoff.
+name: Predict next matchweek
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily; most runs decide there is nothing to do
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no writes to Supabase)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# results.yml uses the SAME group, so the two workflows never write to Supabase at the
+# same time. A queued run superseded by a newer queued run shows as cancelled; that is
+# harmless, the newer run does the same work.
+concurrency:
+  group: supabase-writes
+  cancel-in-progress: false
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the week
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # The service-role (secret) key: it can write. The website never uses it; it
+          # reads with the publishable key.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          PYTHONUNBUFFERED: "1"
+        # run_week.py appends its summary (ACTED or SKIPPED, and why) to $GITHUB_STEP_SUMMARY.
+        run: python run_week.py $DRY_RUN

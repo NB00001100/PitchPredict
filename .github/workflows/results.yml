@@ -1,0 +1,68 @@
+# Pull in final scores shortly after matches end. See update_results.py.
+#
+# GitHub's cron runs in UTC and may start late or be skipped entirely under load, so
+# update_results.py does not trust the clock: it self-gates on the kickoff timestamps
+# in Supabase ("kicked off more than 2 h ago, no final status yet") and only then calls
+# football-data.org. Free-tier scores there are DELAYED (they appear minutes to hours
+# after full time, not live), so this polls and retries rather than trying to be live.
+# Thanks to the self-gate, most runs exit in seconds with no API call.
+#
+# GitHub disables scheduled workflows in a repository with no activity for 60 days;
+# re-enable it from the Actions tab if that happens.
+#
+# COST: in a public repository Actions minutes are free, so every 15 minutes is fine.
+# In a private repository even a no-op run costs ~30-60 s of runner time (checkout +
+# setup-python + pip install), and */15 is ~2,900 runs a month, which can approach or
+# exceed the 2,000 free minutes. Alternatives: "*/30 * * * *", or restrict the cron to
+# match windows (UTC), e.g. weekend afternoons/evenings plus weekday evenings:
+#     - cron: "*/15 12-23 * * 6,0"
+#     - cron: "*/15 18-23 * * 1-5"
+# The tradeoff is slower result updates versus runner minutes.
+name: Update results
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (gate query only; no API call, no writes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# predict.yml uses the SAME group, so the two workflows never write to Supabase at the
+# same time. A queued run superseded by a newer queued run shows as cancelled, which is
+# harmless (the newer run does the same work).
+concurrency:
+  group: supabase-writes
+  cancel-in-progress: false
+
+jobs:
+  results:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Update results
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # The service-role key (writes current_fixtures); never used by the website.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          PYTHONUNBUFFERED: "1"
+        # update_results.py appends its summary to $GITHUB_STEP_SUMMARY itself.
+        run: python update_results.py $DRY_RUN

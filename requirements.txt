@@ -1,4 +1,4 @@
-# Runtime dependencies (what refresh.py and the model need; installed in CI).
+# Runtime dependencies (what run_week.py and the model need; installed in CI).
 # Pinned to versions tested together so the scheduled job does not break on an
 # upstream release; bump deliberately. Dev-only extras: requirements-dev.txt.
 pandas==3.0.6

@@ -1,6 +1,6 @@
 """Team names: football-data.org shortName (current_fixtures) -> football-data.co.uk
 name (matches, and therefore the model). Shared by fit_predict.py,
-backfill_predictions.py and refresh.py.
+backfill_predictions.py and run_week.py.
 
 Every August the three promoted teams need entries here. Run
 
